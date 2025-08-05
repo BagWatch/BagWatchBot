@@ -1,0 +1,1 @@
+worker: python bags_telegram_bot.py

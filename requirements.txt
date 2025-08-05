@@ -1,0 +1,4 @@
+python-telegram-bot==20.3
+requests==2.31.0
+websocket-client==1.6.4
+solana==0.30.2
