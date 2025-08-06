@@ -464,13 +464,28 @@ async def process_new_token(mint_address: str):
 *Contract:* `{escape_markdown(mint_address)}`
 [View on Solscan](https://solscan.io/token/{mint_address})"""
 
-            await telegram_bot.send_message(
-                chat_id=CHANNEL_ID,
-                text=simple_message,
-                parse_mode=ParseMode.MARKDOWN_V2,
-                disable_web_page_preview=False
-            )
-            logger.info(f"✅ Posted simple notification for token: {mint_address}")
+            try:
+                await telegram_bot.send_message(
+                    chat_id=CHANNEL_ID,
+                    text=simple_message,
+                    parse_mode=ParseMode.MARKDOWN_V2,
+                    disable_web_page_preview=False
+                )
+                logger.info(f"✅ Posted simple notification for token: {mint_address}")
+            except Exception as markdown_error:
+                # Fallback to plain text if Markdown fails
+                plain_message = f"""🚀 NEW BAGS TOKEN DETECTED!
+
+Contract: {mint_address}
+View on Solscan: https://solscan.io/token/{mint_address}"""
+                
+                await telegram_bot.send_message(
+                    chat_id=CHANNEL_ID,
+                    text=plain_message,
+                    disable_web_page_preview=False
+                )
+                logger.info(f"✅ Posted plain text notification for token: {mint_address}")
+                logger.warning(f"Markdown failed: {markdown_error}")
             
         except Exception as e:
             logger.error(f"❌ Failed to post token notification: {e}")
