@@ -410,10 +410,17 @@ def fetch_bags_token_data(mint_address: str) -> Optional[Dict]:
                 if result["name"] != "Unknown Token":
                     break
             
+            # Get page text for all extractions
+            try:
+                page_text = driver.find_element(By.TAG_NAME, "body").text
+                logger.info(f"📄 Page loaded successfully, text length: {len(page_text)}")
+            except Exception as e:
+                logger.error(f"Failed to get page text: {e}")
+                page_text = ""
+
             # Additional token name search in page text if still not found
             if result["name"] == "Unknown Token":
                 try:
-                    page_text = driver.find_element(By.TAG_NAME, "body").text
                     # Look for patterns like $TOKENNAME
                     dollar_tokens = re.findall(r'\$([A-Z0-9]{2,20})', page_text)
                     if dollar_tokens:
@@ -421,7 +428,7 @@ def fetch_bags_token_data(mint_address: str) -> Optional[Dict]:
                         logger.info(f"✅ Found token name from $ pattern: {result['name']}")
                 except:
                     pass
-            
+
             # Always get complete metadata from Helius (primary data source)
             logger.info(f"🔍 Getting complete metadata from Helius for {mint_address}")
             helius_metadata = get_helius_metadata(mint_address)
