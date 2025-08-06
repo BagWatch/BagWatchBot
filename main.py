@@ -276,23 +276,43 @@ def fetch_bags_token_data(mint_address: str) -> Optional[Dict]:
             except Exception as e:
                 logger.error(f"Error in token image extraction: {e}")
             
-            # Extract token name
+            # Extract token name with improved detection
             logger.info("📛 Looking for token name...")
-            name_selectors = ["h1", "h2", ".title", ".token-title", ".text-4xl", ".text-3xl", ".text-2xl", ".text-xl", ".font-bold"]
+            name_selectors = ["h1", "h2", ".title", ".token-title", ".text-4xl", ".text-3xl", ".text-2xl", ".text-xl", ".font-bold", ".font-semibold"]
+            
             for selector in name_selectors:
                 try:
                     elements = driver.find_elements(By.CSS_SELECTOR, selector)
                     for element in elements:
                         text = element.text.strip()
-                        if text and 3 <= len(text) <= 50:
-                            if len(text.split()) <= 4 and not any(skip in text.lower() for skip in ["trade", "launch", "buy", "sell", "connect"]):
-                                result["name"] = text
-                                logger.info(f"✅ Found token name: '{text}' via {selector}")
-                                break
+                        if text and 2 <= len(text) <= 100:  # More flexible length
+                            # Skip navigation and UI elements
+                            if not any(skip in text.lower() for skip in ["trade", "launch", "buy", "sell", "connect", "wallet", "settings", "home", "back"]):
+                                # Prefer names that look like token names
+                                if any(indicator in text for indicator in ["$", "TOKEN", "COIN"]) or len(text.split()) <= 5:
+                                    result["name"] = text
+                                    logger.info(f"✅ Found token name: '{text}' via {selector}")
+                                    break
+                                # Fallback: any reasonable text that's not too generic
+                                elif len(text) >= 3 and result["name"] == "Unknown Token":
+                                    result["name"] = text
+                                    logger.info(f"✅ Found potential token name: '{text}' via {selector}")
                 except:
                     continue
                 if result["name"] != "Unknown Token":
                     break
+            
+            # Additional token name search in page text if still not found
+            if result["name"] == "Unknown Token":
+                try:
+                    page_text = driver.find_element(By.TAG_NAME, "body").text
+                    # Look for patterns like $TOKENNAME
+                    dollar_tokens = re.findall(r'\$([A-Z0-9]{2,20})', page_text)
+                    if dollar_tokens:
+                        result["name"] = f"${dollar_tokens[0]}"
+                        logger.info(f"✅ Found token name from $ pattern: {result['name']}")
+                except:
+                    pass
             
             # Extract Twitter handles
             twitter_elements = driver.find_elements(By.CSS_SELECTOR, "a[href*='twitter.com'], a[href*='x.com']")
@@ -408,20 +428,20 @@ Mint: {mint_address}
 Solscan: https://solscan.io/token/{mint_address}
 """
         
-        # Handle Twitter display logic
+        # Handle Twitter display logic with proper links
         if creator_clean and royalty_clean and creator_clean.lower() != royalty_clean.lower():
-            # Different creator and fee recipient
-            message += f"\nCreator: @{creator_clean}"
-            message += f"\nFee Recipient: @{royalty_clean}"
+            # Different creator and fee recipient - show both with Twitter links
+            message += f"\nCreator: https://x.com/{creator_clean}"
+            message += f"\nFee Recipient: https://x.com/{royalty_clean}"
         elif creator_clean and royalty_clean and creator_clean.lower() == royalty_clean.lower():
             # Same person for both
-            message += f"\nTwitter: @{creator_clean}"
+            message += f"\nTwitter: https://x.com/{creator_clean}"
         elif creator_clean:
             # Only creator
-            message += f"\nCreator: @{creator_clean}"
+            message += f"\nCreator: https://x.com/{creator_clean}"
         elif royalty_clean:
-            # Only fee recipient
-            message += f"\nFee Recipient: @{royalty_clean}"
+            # Only fee recipient  
+            message += f"\nFee Recipient: https://x.com/{royalty_clean}"
         
         # Add royalty percentage if available
         if royalty_percentage is not None:
