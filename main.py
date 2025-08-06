@@ -123,6 +123,39 @@ def clean_twitter_handle(handle: str) -> str:
     
     return cleaned
 
+def get_helius_token_name(mint_address: str) -> Optional[str]:
+    """Get proper token name from Helius API"""
+    try:
+        # Use Helius getAsset API for metadata
+        payload = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "getAsset",
+            "params": [mint_address]
+        }
+        
+        # Use the RPC URL which should have Helius if HELIUS_API_KEY is set
+        response = requests.post(RPC_URL, json=payload, timeout=5)
+        if response.status_code == 200:
+            result = response.json()
+            asset_data = result.get("result")
+            
+            if asset_data:
+                content = asset_data.get("content", {})
+                metadata = content.get("metadata", {})
+                name = metadata.get("name")
+                
+                if name and name.strip() and name != mint_address:
+                    logger.info(f"✅ Helius found name: {name}")
+                    return name.strip()
+        
+        logger.debug("No valid name from Helius")
+        return None
+        
+    except Exception as e:
+        logger.debug(f"Helius name lookup failed: {e}")
+        return None
+
 def fetch_bags_token_data(mint_address: str) -> Optional[Dict]:
     """Fetch token data from Bags website using browser automation"""
     try:
@@ -314,28 +347,28 @@ def fetch_bags_token_data(mint_address: str) -> Optional[Dict]:
                 except:
                     pass
             
-            # Extract token symbol from page
-            logger.info("🔤 Looking for token symbol...")
+            # Extract ticker/symbol (the $ version) from page
+            logger.info("🔤 Looking for ticker symbol...")
             try:
                 page_text = driver.find_element(By.TAG_NAME, "body").text
                 
-                # Look for symbol patterns on Bags pages
-                if result["name"] and result["name"].startswith("$"):
-                    # If name is $NYANCAT, symbol should be NYANCAT
-                    symbol_candidate = result["name"][1:]  # Remove $
-                    if len(symbol_candidate) <= 10 and symbol_candidate.isupper():
-                        result["symbol"] = symbol_candidate
-                        logger.info(f"✅ Derived symbol from name: {symbol_candidate}")
-                else:
-                    # Look for symbol patterns in text
-                    symbol_matches = re.findall(r'\b([A-Z]{2,10})\b', page_text)
-                    for match in symbol_matches:
-                        if match not in ['BAGS', 'SOL', 'USD', 'API', 'NFT', 'DAO']:
-                            result["symbol"] = match
-                            logger.info(f"✅ Found symbol: {match}")
-                            break
+                # Look for $SYMBOL patterns which should be the ticker
+                dollar_symbols = re.findall(r'\$([A-Z0-9]{2,20})', page_text)
+                if dollar_symbols:
+                    # Use the $ version as the ticker
+                    result["symbol"] = f"${dollar_symbols[0]}"
+                    logger.info(f"✅ Found ticker: {result['symbol']}")
+                
+                # If we found a $ pattern, also try to get the proper name from Helius
+                if dollar_symbols:
+                    logger.info(f"🔍 Getting proper token name from Helius for {mint_address}")
+                    helius_name = get_helius_token_name(mint_address)
+                    if helius_name and helius_name != "Unknown Token":
+                        result["name"] = helius_name
+                        logger.info(f"✅ Helius token name: {helius_name}")
+                    
             except Exception as e:
-                logger.debug(f"Error extracting symbol: {e}")
+                logger.debug(f"Error extracting ticker: {e}")
             
             # Enhanced Twitter/Creator extraction for Bags page format
             logger.info("🐦 Looking for creator and fee recipient...")
@@ -491,6 +524,11 @@ Solscan: https://solscan.io/token/{mint_address}
         
         # Add website
         message += f"\nWebsite: https://bags.fm/{mint_address}"
+        
+        # Add trading links
+        message += f"\n\n📈 TRADE NOW:"
+        message += f"\n• [AXIOM](https://axiomspace.xyz/?inputCurrency=So11111111111111111111111111111111111112&outputCurrency={mint_address})"
+        message += f"\n• [Photon](https://photon-sol.tinyastro.io/en/lp/{mint_address})"
         
         return message
         
