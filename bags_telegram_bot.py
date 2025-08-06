@@ -366,24 +366,7 @@ async def process_new_token(mint_address: str):
         logger.info(f"Processing new token: {mint_address}")
         seen_mints.add(mint_address)
         
-        # BULLETPROOF: Always post a basic message first, then try to enhance it
-        basic_message = f"""🚀 NEW BAGS TOKEN DETECTED!
-
-Contract: {mint_address}
-Solscan: https://solscan.io/token/{mint_address}"""
-
-        # Send basic message immediately
-        try:
-            await telegram_bot.send_message(
-                chat_id=CHANNEL_ID,
-                text=basic_message
-            )
-            logger.info(f"✅ Posted basic notification for: {mint_address}")
-        except Exception as basic_error:
-            logger.error(f"❌ Failed to post basic notification: {basic_error}")
-            return  # If we can't even send a basic message, something is very wrong
-
-        # Now try to get enhanced metadata and send an update
+        # Get metadata and send ONE complete message with all the valuable info
         try:
             metadata_payload = {
                 "jsonrpc": "2.0",
@@ -403,6 +386,20 @@ Solscan: https://solscan.io/token/{mint_address}"""
                     name = metadata.get("name", "Unknown Token")
                     symbol = metadata.get("symbol", "UNKNOWN")
                     
+                    # Check for royalty info in Helius response
+                    royalty_info = asset_data.get("royalty", {})
+                    creator_royalty = royalty_info.get("percent", 0) if royalty_info else 0
+                    
+                    logger.info(f"Helius royalty data: {royalty_info}")
+                    logger.info(f"Helius asset_data keys: {list(asset_data.keys())}")
+                    
+                    # Also check creators array for royalty info
+                    creators = asset_data.get("creators", [])
+                    if creators:
+                        logger.info(f"Creators data: {creators}")
+                        total_creator_share = sum(creator.get("share", 0) for creator in creators)
+                        logger.info(f"Total creator share: {total_creator_share}%")
+                    
                     # Get additional metadata from JSON URI if available
                     json_uri = content.get("json_uri", "")
                     image_uri = ""
@@ -416,12 +413,52 @@ Solscan: https://solscan.io/token/{mint_address}"""
                             if json_response.status_code == 200:
                                 json_data = json_response.json()
                                 image_uri = json_data.get("image", "")
-                                twitter = json_data.get("twitter", "") or json_data.get("creator_twitter", "")
+                                twitter = json_data.get("twitter", "")  # Fee recipient/royalty recipient
+                                creator_twitter = json_data.get("creator_twitter", "")  # Token creator
                                 website = json_data.get("website", "")
-                                royalty_bps = json_data.get("sellerFeeBasisPoints", 0)
-                                royalty_percent = royalty_bps / 100 if royalty_bps else 0
+                                
+                                # Debug the Twitter fields
+                                logger.info(f"Twitter data - twitter (fee recipient): '{twitter}', creator_twitter: '{creator_twitter}'")
+                                
+                                # Check multiple possible royalty fields
+                                royalty_bps = (
+                                    json_data.get("sellerFeeBasisPoints", 0) or
+                                    json_data.get("seller_fee_basis_points", 0) or
+                                    json_data.get("royalty", 0) or
+                                    json_data.get("royaltyBps", 0)
+                                )
+                                
+                                # Convert to percentage
+                                if royalty_bps > 100:  # Likely in basis points
+                                    royalty_percent = royalty_bps / 100
+                                else:  # Already in percentage or small basis points
+                                    royalty_percent = royalty_bps
+                                
+                                # Debug logging
+                                logger.info(f"Royalty data - raw: {royalty_bps}, percentage: {royalty_percent}%")
+                                logger.info(f"Available JSON fields: {list(json_data.keys())}")
+                                
+                                # Check if there are any royalty-related fields we might be missing
+                                royalty_fields = [key for key in json_data.keys() if 'royalt' in key.lower() or 'fee' in key.lower()]
+                                if royalty_fields:
+                                    logger.info(f"Found royalty-related fields: {royalty_fields}")
+                                    for field in royalty_fields:
+                                        logger.info(f"  {field}: {json_data[field]}")
                         except:
                             pass  # Don't let metadata fetching break the flow
+                    
+                    # Use the best available royalty data
+                    final_royalty = 0
+                    if creator_royalty > 0:
+                        final_royalty = creator_royalty
+                        logger.info(f"Using Helius royalty: {final_royalty}%")
+                    elif royalty_percent > 0:
+                        final_royalty = royalty_percent
+                        logger.info(f"Using JSON royalty: {final_royalty}%")
+                    else:
+                        logger.info("No royalty data found")
+                    
+                    royalty_percent = final_royalty
                     
                     # Create enhanced message with all details (plain text for reliability)
                     enhanced_message = f"""🚀 NEW BAGS TOKEN DETAILS!
@@ -431,9 +468,21 @@ Ticker: {symbol}
 Contract: {mint_address}
 Solscan: https://solscan.io/token/{mint_address}"""
 
-                    if twitter:
+                    # Handle Twitter links intelligently
+                    if creator_twitter and twitter and creator_twitter != twitter:
+                        # Both creator and fee recipient have different Twitter accounts
+                        creator_clean = creator_twitter.replace("@", "").replace("https://x.com/", "").replace("https://twitter.com/", "")
+                        fee_clean = twitter.replace("@", "").replace("https://x.com/", "").replace("https://twitter.com/", "")
+                        enhanced_message += f"\nCreator: https://x.com/{creator_clean}"
+                        enhanced_message += f"\nRoyalties: https://x.com/{fee_clean}"
+                    elif twitter:
+                        # Only fee recipient/main Twitter
                         twitter_clean = twitter.replace("@", "").replace("https://x.com/", "").replace("https://twitter.com/", "")
-                        enhanced_message += f"\nTwitter: @{twitter_clean}"
+                        enhanced_message += f"\nTwitter: https://x.com/{twitter_clean}"
+                    elif creator_twitter:
+                        # Only creator Twitter
+                        creator_clean = creator_twitter.replace("@", "").replace("https://x.com/", "").replace("https://twitter.com/", "")
+                        enhanced_message += f"\nCreator: https://x.com/{creator_clean}"
                     
                     enhanced_message += f"\nRoyalty: {royalty_percent}%"
                     
@@ -465,47 +514,33 @@ Solscan: https://solscan.io/token/{mint_address}"""
                         logger.warning(f"Failed to send enhanced message: {enhanced_error}")
                         # Already sent basic message, so we're good
             
-            # Fallback to simple message if metadata fails
-            simple_message = f"""🚀 NEW BAGS TOKEN DETECTED\\!
-
-*Contract:* `{escape_markdown(mint_address)}`
-[View on Solscan](https://solscan.io/token/{mint_address})"""
-
-            try:
-                await telegram_bot.send_message(
-                    chat_id=CHANNEL_ID,
-                    text=simple_message,
-                    parse_mode=ParseMode.MARKDOWN_V2,
-                    disable_web_page_preview=False
-                )
-                logger.info(f"✅ Posted simple notification for token: {mint_address}")
-            except Exception as markdown_error:
-                # Fallback to plain text if Markdown fails
-                plain_message = f"""🚀 NEW BAGS TOKEN DETECTED!
+            # If we get here, metadata failed - send emergency fallback with available info
+            logger.warning("Metadata fetch failed, sending emergency notification")
+            emergency_message = f"""🚀 NEW BAGS TOKEN DETECTED!
 
 Contract: {mint_address}
-View on Solscan: https://solscan.io/token/{mint_address}"""
-                
-                await telegram_bot.send_message(
-                    chat_id=CHANNEL_ID,
-                    text=plain_message,
-                    disable_web_page_preview=False
-                )
-                logger.info(f"✅ Posted plain text notification for token: {mint_address}")
-                logger.warning(f"Markdown failed: {markdown_error}")
+Solscan: https://solscan.io/token/{mint_address}
+
+⚠️ Metadata temporarily unavailable"""
+
+            await telegram_bot.send_message(
+                chat_id=CHANNEL_ID,
+                text=emergency_message
+            )
+            logger.info(f"✅ Posted emergency notification for: {mint_address}")
             
         except Exception as e:
             logger.error(f"❌ Failed to post token notification: {e}")
-            # EMERGENCY FALLBACK - Always post something!
+            # FINAL EMERGENCY FALLBACK
             try:
-                emergency_message = f"🚀 NEW BAGS TOKEN: {mint_address}\nhttps://solscan.io/token/{mint_address}"
+                final_message = f"🚀 NEW BAGS TOKEN: {mint_address}\nhttps://solscan.io/token/{mint_address}"
                 await telegram_bot.send_message(
                     chat_id=CHANNEL_ID,
-                    text=emergency_message
+                    text=final_message
                 )
-                logger.info(f"✅ Posted emergency fallback for: {mint_address}")
-            except Exception as emergency_error:
-                logger.error(f"❌ Even emergency fallback failed: {emergency_error}")
+                logger.info(f"✅ Posted final emergency fallback for: {mint_address}")
+            except Exception as final_error:
+                logger.error(f"❌ All fallbacks failed: {final_error}")
         
     except Exception as e:
         logger.error(f"Error processing token {mint_address}: {e}")
