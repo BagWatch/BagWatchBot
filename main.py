@@ -283,14 +283,27 @@ def fetch_bags_token_data(mint_address: str) -> Optional[Dict]:
             # Load the Bags page
             driver.get(f"https://bags.fm/{mint_address}")
             
-            # OPTIMIZED: Reduced wait times for faster extraction
-            time.sleep(8)  # Reduced from 15s to 8s
+            # Wait for complete page load including fee split content
+            logger.info("⏳ Waiting for complete page load...")
+            time.sleep(5)  # Initial load
             
-            # Quick scroll to trigger any lazy loading
+            # Scroll to trigger lazy loading and wait for dynamic content
             driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-            time.sleep(1)  # Reduced from 3s to 1s
+            time.sleep(2)
             driver.execute_script("window.scrollTo(0, 0);")
-            time.sleep(1)  # Reduced from 2s to 1s
+            time.sleep(2)
+            
+            # Wait specifically for fee split sections to load
+            max_wait = 10
+            for i in range(max_wait):
+                try:
+                    page_source = driver.page_source
+                    if "created by" in page_source.lower() and ("royalties to" in page_source.lower() or "earns" in page_source.lower()):
+                        logger.info(f"✅ Fee split content detected after {5 + 4 + i}s")
+                        break
+                    time.sleep(1)
+                except:
+                    time.sleep(1)
             
             # Initialize result structure
             result = {
@@ -469,164 +482,82 @@ def fetch_bags_token_data(mint_address: str) -> Optional[Dict]:
             except Exception as e:
                 logger.debug(f"Error extracting ticker: {e}")
             
-            # BULLETPROOF fee split extraction - this CANNOT fail
-            logger.info("🎯 BULLETPROOF FEE SPLIT EXTRACTION...")
-            logger.info(f"📄 Full page text for debugging:\n{page_text}")
+            # SIMPLE fee split extraction - just get the two Twitter handles
+            logger.info("🎯 SIMPLE FEE SPLIT EXTRACTION...")
+            logger.info(f"📄 Page text length: {len(page_text)}")
+            
+            # Look for the two key patterns in the page text
             try:
-                # Method 1: Target specific HTML elements that contain the user info
+                # Simple, direct extraction
+                logger.info("🔍 Searching page text for fee split info...")
+                
+                # Find ALL Twitter/X links on the page first
+                twitter_links = driver.find_elements(By.CSS_SELECTOR, "a[href*='twitter.com'], a[href*='x.com']")
+                logger.info(f"🔗 Found {len(twitter_links)} total Twitter links")
+                
+                # Get the full page source for text analysis
+                full_page = driver.page_source
+                
+                # Extract handles and analyze context
                 creator_handle = None
                 fee_handle = None
                 
-                # Look for elements that contain "created by" text
-                try:
-                    # Find all text elements that might contain "created by"
-                    all_elements = driver.find_elements(By.XPATH, "//*[contains(text(), 'created by')]")
-                    logger.info(f"🔍 Found {len(all_elements)} elements containing 'created by'")
-                    
-                    for i, element in enumerate(all_elements):
-                        try:
-                            element_text = element.text
-                            logger.info(f"🔍 Element {i} text: '{element_text}'")
+                for link in twitter_links:
+                    try:
+                        href = link.get_attribute('href')
+                        # Extract username from URL
+                        handle_match = re.search(r'(?:twitter\.com|x\.com)/([^/?]+)', href)
+                        if handle_match:
+                            handle = handle_match.group(1)
+                            if handle in ['intent', 'share', 'home']:
+                                continue
                             
-                            # Get parent container that should have the Twitter link
-                            parent = element.find_element(By.XPATH, "..")
-                            twitter_links = parent.find_elements(By.CSS_SELECTOR, "a[href*='x.com'], a[href*='twitter.com']")
-                            logger.info(f"🔍 Found {len(twitter_links)} Twitter links in parent")
+                            logger.info(f"🔍 Analyzing handle: @{handle}")
                             
-                            for link in twitter_links:
-                                href = link.get_attribute('href')
-                                logger.info(f"🔗 Twitter link: {href}")
+                            # Check the surrounding HTML context
+                            try:
+                                # Get the element's outer HTML to see context
+                                element_html = link.get_attribute('outerHTML')
+                                parent = link.find_element(By.XPATH, "..")
+                                parent_text = parent.text.lower()
                                 
-                                handle_match = re.search(r'(?:twitter\.com|x\.com)/([^/?]+)', href)
-                                if handle_match:
-                                    creator_handle = handle_match.group(1)
-                                    logger.info(f"🎯 CREATOR found via 'created by' element: @{creator_handle}")
-                                    break
-                            if creator_handle:
-                                break
-                        except Exception as sub_e:
-                            logger.debug(f"Error processing created by element {i}: {sub_e}")
-                            continue
-                except Exception as e:
-                    logger.debug(f"Created by element search failed: {e}")
-                
-                # Look for elements that contain "royalties to" text
-                try:
-                    all_elements = driver.find_elements(By.XPATH, "//*[contains(text(), 'royalties to')]")
-                    logger.info(f"🔍 Found {len(all_elements)} elements containing 'royalties to'")
-                    
-                    for i, element in enumerate(all_elements):
-                        try:
-                            element_text = element.text
-                            logger.info(f"🔍 Element {i} text: '{element_text}'")
-                            
-                            # Get parent container that should have the Twitter link
-                            parent = element.find_element(By.XPATH, "..")
-                            twitter_links = parent.find_elements(By.CSS_SELECTOR, "a[href*='x.com'], a[href*='twitter.com']")
-                            logger.info(f"🔍 Found {len(twitter_links)} Twitter links in parent")
-                            
-                            for link in twitter_links:
-                                href = link.get_attribute('href')
-                                logger.info(f"🔗 Twitter link: {href}")
+                                logger.info(f"  📄 Context: {parent_text}")
                                 
-                                handle_match = re.search(r'(?:twitter\.com|x\.com)/([^/?]+)', href)
-                                if handle_match:
-                                    fee_handle = handle_match.group(1)
-                                    logger.info(f"💰 FEE RECIPIENT found via 'royalties to' element: @{fee_handle}")
-                                    break
-                            if fee_handle:
-                                break
-                        except Exception as sub_e:
-                            logger.debug(f"Error processing royalties to element {i}: {sub_e}")
-                            continue
-                except Exception as e:
-                    logger.debug(f"Royalties to element search failed: {e}")
-                
-                # Method 2: If HTML targeting failed, use improved text pattern matching
-                if not creator_handle or not fee_handle:
-                    logger.info("🔍 Fallback to improved text patterns...")
-                    logger.info(f"🔍 Missing: creator={not creator_handle}, fee_recipient={not fee_handle}")
-                    
-                    # Look for exact pattern: "created by" followed by username and "X"
-                    creator_pattern = r'created by[^@]*?([A-Z0-9_]{3,20})\s*X'
-                    logger.info(f"🔍 Searching for creator pattern: {creator_pattern}")
-                    creator_match = re.search(creator_pattern, page_text, re.IGNORECASE)
-                    if creator_match and not creator_handle:
-                        creator_handle = creator_match.group(1).strip()
-                        logger.info(f"🎯 CREATOR found via text pattern: @{creator_handle}")
-                    else:
-                        logger.info(f"🔍 Creator pattern {'found' if creator_match else 'NOT found'}, already have creator: {bool(creator_handle)}")
-                    
-                    # Look for exact pattern: "royalties to" followed by username and "X"  
-                    royalty_pattern = r'royalties to[^@]*?([A-Z0-9_]{3,20})\s*X'
-                    logger.info(f"🔍 Searching for royalty pattern: {royalty_pattern}")
-                    royalty_match = re.search(royalty_pattern, page_text, re.IGNORECASE)
-                    if royalty_match and not fee_handle:
-                        fee_handle = royalty_match.group(1).strip()
-                        logger.info(f"💰 FEE RECIPIENT found via text pattern: @{fee_handle}")
-                    else:
-                        logger.info(f"🔍 Royalty pattern {'found' if royalty_match else 'NOT found'}, already have fee_handle: {bool(fee_handle)}")
-                
-                # Method 3: Last resort - try to parse the structured data
-                if not creator_handle or not fee_handle:
-                    logger.info("🆘 LAST RESORT: Parse any Twitter handles and match with context...")
-                    
-                    # Get all Twitter links on the page
-                    twitter_elements = driver.find_elements(By.CSS_SELECTOR, "a[href*='twitter.com'], a[href*='x.com']")
-                    handles_found = []
-                    
-                    for element in twitter_elements:
-                        try:
-                            href = element.get_attribute('href')
-                            handle_match = re.search(r'(?:twitter\.com|x\.com)/([^/?]+)', href)
-                            if handle_match:
-                                handle = handle_match.group(1)
-                                if handle not in ['intent', 'share', 'home']:
-                                    handles_found.append(handle)
-                        except:
-                            continue
-                    
-                    logger.info(f"🔗 Found Twitter handles: {handles_found}")
-                    
-                    # Match handles with text context
-                    for handle in handles_found:
-                        if handle.upper() in page_text.upper():
-                            # Check if this handle appears near "created by"
-                            created_context = page_text.lower().find('created by')
-                            handle_pos = page_text.upper().find(handle.upper())
-                            
-                            if created_context != -1 and handle_pos != -1:
-                                distance = abs(handle_pos - created_context)
-                                if distance < 200 and not creator_handle:  # Within 200 chars
+                                # Simple, direct checks
+                                if "created by" in parent_text and not creator_handle:
                                     creator_handle = handle
-                                    logger.info(f"🎯 CREATOR matched by proximity: @{handle}")
-                            
-                            # Check if this handle appears near "royalties to"
-                            royalty_context = page_text.lower().find('royalties to')
-                            if royalty_context != -1 and handle_pos != -1:
-                                distance = abs(handle_pos - royalty_context)
-                                if distance < 200 and not fee_handle:  # Within 200 chars
+                                    logger.info(f"🎯 CREATOR: @{handle} (found via 'created by')")
+                                elif "royalties to" in parent_text and not fee_handle:
                                     fee_handle = handle
-                                    logger.info(f"💰 FEE RECIPIENT matched by proximity: @{handle}")
+                                    logger.info(f"💰 FEE RECIPIENT: @{handle} (found via 'royalties to')")
+                                elif "earns 100%" in parent_text and not fee_handle:
+                                    fee_handle = handle
+                                    logger.info(f"💰 FEE RECIPIENT: @{handle} (found via 'earns 100%')")
+                                elif "earns 0%" in parent_text and not creator_handle:
+                                    creator_handle = handle
+                                    logger.info(f"🎯 CREATOR: @{handle} (found via 'earns 0%')")
+                                    
+                            except Exception as context_error:
+                                logger.debug(f"Context analysis failed for @{handle}: {context_error}")
+                                
+                    except Exception as link_error:
+                        logger.debug(f"Link analysis failed: {link_error}")
+                        continue
                 
-                # CRITICAL: Do not assign fallbacks that could be wrong
+                # Set the results
                 if creator_handle:
                     result["createdBy"]["twitter"] = creator_handle
-                    logger.info(f"✅ CREATOR SET: @{creator_handle}")
-                else:
-                    logger.warning("❌ NO CREATOR FOUND - leaving empty")
-                    
+                    logger.info(f"✅ CREATOR: @{creator_handle}")
+                
                 if fee_handle:
                     result["royaltiesTo"]["twitter"] = fee_handle
-                    logger.info(f"✅ FEE RECIPIENT SET: @{fee_handle}")
-                else:
-                    logger.warning("❌ NO FEE RECIPIENT FOUND - leaving empty")
+                    logger.info(f"✅ FEE RECIPIENT: @{fee_handle}")
                 
-                logger.info(f"🏁 BULLETPROOF RESULT - Creator: @{creator_handle}, Fee Recipient: @{fee_handle}")
+                if not creator_handle and not fee_handle:
+                    logger.warning("❌ No Twitter handles found in fee split sections")
                     
             except Exception as e:
-                logger.error(f"Error in bulletproof fee split extraction: {e}")
-                # Do NOT set any fallback values that could be wrong
+                logger.error(f"Error in fee split extraction: {e}")
             
             # Extract project website (if different from Bags page)
             logger.info("🌐 Looking for project website...")
@@ -826,7 +757,7 @@ async def send_telegram_message(mint_address: str, token_data: Dict):
 # ============================================================================
 
 async def process_new_token(mint_address: str):
-    """Process a newly detected token using Bags browser automation"""
+    """Process a newly detected token with hybrid data approach"""
     try:
         if mint_address in seen_mints:
             return
@@ -834,15 +765,58 @@ async def process_new_token(mint_address: str):
         logger.info(f"Processing new token: {mint_address}")
         seen_mints.add(mint_address)
         
-        # Fetch token data from Bags website using browser automation
-        token_data = fetch_bags_token_data(mint_address)
+        # Step 1: Always get Helius metadata (primary data source)
+        logger.info(f"🔍 Getting primary token data from Helius...")
+        helius_data = get_helius_metadata(mint_address)
         
-        if token_data:
-            # Send Telegram message with browser-extracted data
-            await send_telegram_message(mint_address, token_data)
+        # Step 2: Try to get fee split data from browser scraper
+        logger.info(f"🔍 Getting fee split data from Bags scraper...")
+        bags_data = fetch_bags_token_data(mint_address)
+        
+        # Step 3: Combine data sources - prioritize Helius for main data, Bags for fee split
+        combined_data = {
+            "name": helius_data.get("name") or "Unknown Token",
+            "symbol": helius_data.get("symbol") or "UNKNOWN", 
+            "image": helius_data.get("image") or "",
+            "website": helius_data.get("website") or "",
+            "createdBy": {"twitter": ""},
+            "royaltiesTo": {"twitter": ""},
+            "royaltyPercentage": None
+        }
+        
+        # Add ONLY fee split data from Bags scraper (keep it simple)
+        if bags_data:
+            logger.info(f"✅ Adding fee split data from Bags scraper")
+            
+            # Only extract creator and fee recipient Twitter handles
+            creator_twitter = bags_data.get("createdBy", {}).get("twitter", "")
+            fee_twitter = bags_data.get("royaltiesTo", {}).get("twitter", "")
+            
+            if creator_twitter:
+                combined_data["createdBy"]["twitter"] = creator_twitter
+                logger.info(f"📝 Creator Twitter: @{creator_twitter}")
+            
+            if fee_twitter:
+                combined_data["royaltiesTo"]["twitter"] = fee_twitter  
+                logger.info(f"📝 Fee Recipient Twitter: @{fee_twitter}")
+                
+            # Log what we found
+            if creator_twitter and fee_twitter:
+                if creator_twitter.lower() == fee_twitter.lower():
+                    logger.info(f"👤 Same person: @{creator_twitter}")
+                else:
+                    logger.info(f"💰 Fee split detected: Creator @{creator_twitter} → Fee Recipient @{fee_twitter}")
         else:
-            # Fallback if browser automation fails
-            logger.warning(f"Bags browser extraction failed for {mint_address}, sending basic notification")
+            logger.info(f"⚠️ No fee split data from Bags scraper")
+        
+        # Step 4: Send the message with combined data
+        if combined_data["name"] != "Unknown Token" or combined_data["image"]:
+            # We have good data from Helius, send rich message
+            logger.info(f"✅ Sending rich message with Helius data")
+            await send_telegram_message(mint_address, combined_data)
+        else:
+            # Both sources failed, send basic fallback
+            logger.warning(f"❌ Both Helius and Bags failed, sending basic notification")
             fallback_message = f"""🚀 New Coin Launched on Bags!
 
 Mint: {mint_address}
