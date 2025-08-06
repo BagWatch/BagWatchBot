@@ -466,27 +466,27 @@ async def process_new_token(mint_address: str):
 Name: {name}
 Ticker: {symbol}
 Contract: {mint_address}
-Solscan: https://solscan.io/token/{mint_address}
+[View on Solscan](https://solscan.io/token/{mint_address})
 
 📈 TRADE NOW:
-• AXIOM: https://axiom.trade/@bagwatch/{mint_address}
-• Photon: https://photon-sol.tinyastro.io/en/r/@BagWatch/{mint_address}"""
+• [AXIOM](https://axiom.trade/t/{mint_address}/@bagwatch)
+• [Photon](https://photon-sol.tinyastro.io/en/r/@BagWatch/{mint_address})"""
 
-                    # Handle Twitter links intelligently
+                    # Handle Twitter links intelligently with clean clickable names
                     if creator_twitter and twitter and creator_twitter != twitter:
                         # Both creator and fee recipient have different Twitter accounts
                         creator_clean = creator_twitter.replace("@", "").replace("https://x.com/", "").replace("https://twitter.com/", "")
                         fee_clean = twitter.replace("@", "").replace("https://x.com/", "").replace("https://twitter.com/", "")
-                        enhanced_message += f"\nCreator: https://x.com/{creator_clean}"
-                        enhanced_message += f"\nRoyalties: https://x.com/{fee_clean}"
+                        enhanced_message += f"\nCreator: [@{creator_clean}](https://x.com/{creator_clean})"
+                        enhanced_message += f"\nRoyalties: [@{fee_clean}](https://x.com/{fee_clean})"
                     elif twitter:
                         # Only fee recipient/main Twitter
                         twitter_clean = twitter.replace("@", "").replace("https://x.com/", "").replace("https://twitter.com/", "")
-                        enhanced_message += f"\nTwitter: https://x.com/{twitter_clean}"
+                        enhanced_message += f"\nTwitter: [@{twitter_clean}](https://x.com/{twitter_clean})"
                     elif creator_twitter:
                         # Only creator Twitter
                         creator_clean = creator_twitter.replace("@", "").replace("https://x.com/", "").replace("https://twitter.com/", "")
-                        enhanced_message += f"\nCreator: https://x.com/{creator_clean}"
+                        enhanced_message += f"\nCreator: [@{creator_clean}](https://x.com/{creator_clean})"
                     
                     enhanced_message += f"\nRoyalty: {royalty_percent}%"
                     
@@ -499,35 +499,61 @@ Solscan: https://solscan.io/token/{mint_address}
                             await telegram_bot.send_photo(
                                 chat_id=CHANNEL_ID,
                                 photo=image_uri,
-                                caption=enhanced_message
+                                caption=enhanced_message,
+                                parse_mode=ParseMode.MARKDOWN
                             )
                             logger.info(f"✅ Posted enhanced info with image: {mint_address}")
                             return
                         except Exception as img_error:
-                            logger.warning(f"Failed to send image: {img_error}")
+                            logger.warning(f"Failed to send image with Markdown: {img_error}")
+                            # Try without Markdown formatting
+                            try:
+                                plain_caption = enhanced_message.replace("[", "").replace("](", ": ").replace(")", "")
+                                await telegram_bot.send_photo(
+                                    chat_id=CHANNEL_ID,
+                                    photo=image_uri,
+                                    caption=plain_caption
+                                )
+                                logger.info(f"✅ Posted enhanced info with image (plain): {mint_address}")
+                                return
+                            except Exception as plain_img_error:
+                                logger.warning(f"Failed to send image: {plain_img_error}")
                     
                     # Send enhanced text message (no image)
                     try:
                         await telegram_bot.send_message(
                             chat_id=CHANNEL_ID,
-                            text=enhanced_message
+                            text=enhanced_message,
+                            parse_mode=ParseMode.MARKDOWN,
+                            disable_web_page_preview=True
                         )
                         logger.info(f"✅ Posted enhanced info: {mint_address}")
                         return
                     except Exception as enhanced_error:
-                        logger.warning(f"Failed to send enhanced message: {enhanced_error}")
-                        # Already sent basic message, so we're good
+                        logger.warning(f"Failed to send enhanced message with Markdown: {enhanced_error}")
+                        # Try without Markdown formatting
+                        try:
+                            plain_message = enhanced_message.replace("[", "").replace("](", ": ").replace(")", "")
+                            await telegram_bot.send_message(
+                                chat_id=CHANNEL_ID,
+                                text=plain_message,
+                                disable_web_page_preview=True
+                            )
+                            logger.info(f"✅ Posted enhanced info (plain): {mint_address}")
+                            return
+                        except Exception as plain_error:
+                            logger.warning(f"Failed to send plain message: {plain_error}")
             
             # If we get here, metadata failed - send emergency fallback with available info
             logger.warning("Metadata fetch failed, sending emergency notification")
             emergency_message = f"""🚀 NEW BAGS TOKEN DETECTED!
 
 Contract: {mint_address}
-Solscan: https://solscan.io/token/{mint_address}
+[View on Solscan](https://solscan.io/token/{mint_address})
 
 📈 TRADE NOW:
-• AXIOM: https://axiom.trade/@bagwatch/{mint_address}
-• Photon: https://photon-sol.tinyastro.io/en/r/@BagWatch/{mint_address}
+• [AXIOM](https://axiom.trade/t/{mint_address}/@bagwatch)
+• [Photon](https://photon-sol.tinyastro.io/en/r/@BagWatch/{mint_address})
 
 ⚠️ Metadata temporarily unavailable"""
 
