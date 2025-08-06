@@ -466,7 +466,11 @@ async def process_new_token(mint_address: str):
 Name: {name}
 Ticker: {symbol}
 Contract: {mint_address}
-Solscan: https://solscan.io/token/{mint_address}"""
+Solscan: https://solscan.io/token/{mint_address}
+
+📈 TRADE NOW:
+• AXIOM: https://axiom.trade/@bagwatch
+• Photon: https://photon-sol.tinyastro.io/@BagWatch"""
 
                     # Handle Twitter links intelligently
                     if creator_twitter and twitter and creator_twitter != twitter:
@@ -520,6 +524,10 @@ Solscan: https://solscan.io/token/{mint_address}"""
 
 Contract: {mint_address}
 Solscan: https://solscan.io/token/{mint_address}
+
+📈 TRADE NOW:
+• AXIOM: https://axiom.trade/@bagwatch
+• Photon: https://photon-sol.tinyastro.io/@BagWatch
 
 ⚠️ Metadata temporarily unavailable"""
 
