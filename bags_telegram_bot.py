@@ -256,6 +256,55 @@ def escape_markdown(text: str) -> str:
         text = text.replace(char, f'\\{char}')
     return text
 
+async def check_transaction_for_token_creation(signature: str):
+    """Check a specific transaction for token creation"""
+    try:
+        # Get transaction details
+        payload = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "getTransaction",
+            "params": [
+                signature,
+                {
+                    "encoding": "json",
+                    "commitment": "confirmed",
+                    "maxSupportedTransactionVersion": 0
+                }
+            ]
+        }
+        
+        response = requests.post(RPC_URL, json=payload, timeout=10)
+        if response.status_code == 200:
+            result = response.json()
+            transaction_data = result.get("result")
+            
+            if transaction_data and transaction_data.get("meta", {}).get("err") is None:
+                # Transaction was successful
+                logs = transaction_data.get("meta", {}).get("logMessages", [])
+                account_keys = transaction_data.get("transaction", {}).get("message", {}).get("accountKeys", [])
+                
+                # Check if this involves metadata creation
+                metadata_creation = any("CreateMetadataAccount" in log or "metaq" in log.lower() for log in logs)
+                
+                if metadata_creation:
+                    logger.info(f"🎯 METADATA CREATION TRANSACTION: {signature}")
+                    logger.info(f"Account keys: {len(account_keys)}")
+                    
+                    # Look for potential mint address
+                    for i, account in enumerate(account_keys):
+                        if account != METADATA_PROGRAM_ID and account != BAGS_UPDATE_AUTHORITY and len(account) >= 44:
+                            logger.info(f"🚀 POTENTIAL BAGS TOKEN FOUND: {account}")
+                            await process_new_token(account)
+                            break
+                else:
+                    logger.debug(f"Transaction {signature} not a metadata creation")
+            else:
+                logger.debug(f"Transaction {signature} failed or not found")
+        
+    except Exception as e:
+        logger.error(f"Error checking transaction {signature}: {e}")
+
 async def send_telegram_message(mint_address: str, metadata: Dict, ipfs_data: Dict):
     """Send formatted message to Telegram channel"""
     try:
@@ -650,10 +699,37 @@ async def main():
     
     logger.info("Bot is running on Railway...")
     
-    # Keep the main thread alive
+    # Also poll for recent transactions as backup detection method
+    last_signature = None
+    
+    # Keep the main thread alive and check for new transactions
     try:
         while True:
-            await asyncio.sleep(60)  # Check every minute
+            await asyncio.sleep(10)  # Check every 10 seconds
+            
+            # Check for new transactions from Bags deployer
+            try:
+                payload = {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "getSignaturesForAddress",
+                    "params": [BAGS_UPDATE_AUTHORITY, {"limit": 5}]
+                }
+                response = requests.post(RPC_URL, json=payload, timeout=5)
+                if response.status_code == 200:
+                    result = response.json()
+                    signatures = result.get("result", [])
+                    
+                    if signatures and signatures[0].get("signature") != last_signature:
+                        new_signature = signatures[0].get("signature")
+                        logger.info(f"🔍 NEW TRANSACTION from Bags deployer: {new_signature}")
+                        last_signature = new_signature
+                        
+                        # Get the full transaction details
+                        await check_transaction_for_token_creation(new_signature)
+                        
+            except Exception as e:
+                logger.debug(f"Error polling transactions: {e}")
             # Health check - could add ping to Telegram API here
     except KeyboardInterrupt:
         logger.info("Bot stopped by user")
