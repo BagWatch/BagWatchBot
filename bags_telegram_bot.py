@@ -455,13 +455,31 @@ async def process_new_token(mint_address: str):
                                 json_data = json_response.json()
                                 image_uri = json_data.get("image", "")
                                 
-                                # Look for Twitter info in multiple possible fields
-                                twitter = (
+                                # Look for FEE RECIPIENT specifically (not social links)
+                                fee_recipient_twitter = (
+                                    json_data.get("fee_recipient", "") or
+                                    json_data.get("fee_recipient_twitter", "") or
+                                    json_data.get("feeRecipient", "") or
+                                    json_data.get("feeRecipientTwitter", "") or
+                                    json_data.get("share_fees_with", "") or
+                                    json_data.get("shareFesWith", "") or
+                                    json_data.get("royalty_recipient", "") or
+                                    json_data.get("royaltyRecipient", "") or
+                                    json_data.get("seller_fee_recipient", "") or
+                                    json_data.get("sellerFeeRecipient", "")
+                                )  # Actual fee recipient for 90% split
+                                
+                                # Look for SOCIAL/PROJECT Twitter (separate from fee recipient)
+                                social_twitter = (
                                     json_data.get("twitter", "") or 
                                     json_data.get("Twitter", "") or
                                     json_data.get("x", "") or
-                                    json_data.get("X", "")
-                                )  # Fee recipient/royalty recipient
+                                    json_data.get("X", "") or
+                                    json_data.get("social_twitter", "") or
+                                    json_data.get("socialTwitter", "") or
+                                    json_data.get("project_twitter", "") or
+                                    json_data.get("projectTwitter", "")
+                                )  # Project/token social media
                                 
                                 creator_twitter = (
                                     json_data.get("creator_twitter", "") or
@@ -474,18 +492,18 @@ async def process_new_token(mint_address: str):
                                 
                                 website = json_data.get("website", "")
                                 
-                                # Debug the Twitter fields with all possible variations
+                                # Debug the distinction between fee recipient and social links
                                 logger.info(f"JSON metadata keys: {list(json_data.keys())}")
-                                logger.info(f"Raw Twitter data extracted:")
-                                logger.info(f"  twitter (fee recipient): '{twitter}'")
+                                logger.info(f"Twitter data extracted:")
+                                logger.info(f"  fee_recipient_twitter (90% split): '{fee_recipient_twitter}'")
+                                logger.info(f"  social_twitter (project social): '{social_twitter}'")
                                 logger.info(f"  creator_twitter: '{creator_twitter}'")
                                 
-                                # Log all Twitter-related fields for debugging
-                                twitter_related_fields = [key for key in json_data.keys() if 'twitter' in key.lower() or 'x.com' in str(json_data[key]).lower()]
-                                if twitter_related_fields:
-                                    logger.info(f"All Twitter-related fields found:")
-                                    for field in twitter_related_fields:
-                                        logger.info(f"    {field}: '{json_data[field]}'")
+                                # Log ALL fields to help identify the correct fee recipient field
+                                logger.info(f"ALL JSON fields for debugging:")
+                                for key, value in json_data.items():
+                                    if any(term in key.lower() for term in ['twitter', 'fee', 'recipient', 'share', 'royalt', 'social']):
+                                        logger.info(f"    {key}: '{value}'")
                                 
                                 # Check multiple possible royalty/creator fee fields with better logging
                                 royalty_fields_to_check = [
@@ -618,37 +636,34 @@ Contract: {mint_address}
                         return cleaned
                     
                     creator_clean = clean_twitter_handle(creator_twitter)
-                    fee_clean = clean_twitter_handle(twitter)
+                    fee_recipient_clean = clean_twitter_handle(fee_recipient_twitter)
+                    social_clean = clean_twitter_handle(social_twitter)
                     
-                    logger.info(f"Twitter analysis - Creator: '{creator_clean}', Fee Recipient: '{fee_clean}'")
+                    logger.info(f"Twitter analysis:")
+                    logger.info(f"  Creator: '{creator_clean}'")
+                    logger.info(f"  Fee Recipient (90% split): '{fee_recipient_clean}'") 
+                    logger.info(f"  Social/Project: '{social_clean}'")
                     
-                    if creator_clean and fee_clean and creator_clean.lower() != fee_clean.lower():
-                        # BAGS FEE SPLIT - 90% to chosen account
-                        enhanced_message += f"\n💰 90% Fee Split: [@{fee_clean}](https://x.com/{fee_clean})"
+                    # ONLY show fee split if there's a specific fee recipient that's different from creator
+                    if fee_recipient_clean and fee_recipient_clean.lower() != creator_clean.lower():
+                        # ACTUAL BAGS FEE SPLIT - 90% to specifically designated account
+                        enhanced_message += f"\n💰 90% Fee Split: [@{fee_recipient_clean}](https://x.com/{fee_recipient_clean})"
                         twitter_section_added = True
-                        logger.info(f"✅ BAGS FEE SPLIT detected - 90% to @{fee_clean}, 10% to creator")
-                    elif creator_clean and fee_clean and creator_clean.lower() == fee_clean.lower():
-                        # Same person for both creator and fees (no split)
-                        enhanced_message += f"\n💰 90% Fee Split: No split (creator keeps all)"
+                        logger.info(f"✅ REAL BAGS FEE SPLIT detected - 90% to @{fee_recipient_clean}, 10% to creator")
+                    else:
+                        # No fee split detected - creator keeps all fees
                         twitter_section_added = True
-                        logger.info(f"✅ No fee split - creator keeps all fees: @{creator_clean}")
-                    elif creator_clean and not fee_clean:
-                        # Only creator Twitter available (no fee split)
-                        enhanced_message += f"\n💰 90% Fee Split: No split (creator keeps all)"
-                        twitter_section_added = True
-                        logger.info(f"✅ No fee split detected - creator keeps all")
-                    elif not creator_clean and fee_clean:
-                        # Only fee recipient Twitter available
-                        enhanced_message += f"\n💰 90% Fee Split: [@{fee_clean}](https://x.com/{fee_clean})"
-                        twitter_section_added = True
-                        logger.info(f"✅ Fee split to @{fee_clean}")
-                    elif not creator_clean and not fee_clean:
-                        # No Twitter info available
-                        enhanced_message += f"\n💰 90% Fee Split: None"
-                        twitter_section_added = True
-                        logger.warning(f"❌ No fee split information found for token {mint_address}")
+                        if fee_recipient_clean and fee_recipient_clean.lower() == creator_clean.lower():
+                            logger.info(f"✅ Fee recipient same as creator - no split: @{creator_clean}")
+                        else:
+                            logger.info(f"✅ No fee recipient specified - creator keeps all fees")
                     
-                    logger.info(f"Raw twitter fields - creator_twitter: '{creator_twitter}', twitter: '{twitter}'")
+                    # Add social media link if available and different from fee recipient
+                    if social_clean and social_clean != fee_recipient_clean:
+                        enhanced_message += f"\n🐦 Twitter: [@{social_clean}](https://x.com/{social_clean})"
+                        logger.info(f"✅ Added social Twitter link: @{social_clean}")
+                    
+                    logger.info(f"Raw fields - creator: '{creator_twitter}', fee_recipient: '{fee_recipient_twitter}', social: '{social_twitter}'")
                     
                     if website:
                         enhanced_message += f"\nWebsite: {website}"
