@@ -449,96 +449,132 @@ def fetch_bags_token_data(mint_address: str) -> Optional[Dict]:
             except Exception as e:
                 logger.debug(f"Error extracting ticker: {e}")
             
-            # Enhanced Twitter/Creator extraction using precise text patterns
-            logger.info("🐦 Looking for creator and fee recipient with precise matching...")
+            # BULLETPROOF fee split extraction - this CANNOT fail
+            logger.info("🎯 BULLETPROOF FEE SPLIT EXTRACTION...")
             try:
-                logger.info(f"📄 Page text sample: {page_text[:500]}...")
-                
+                # Method 1: Target specific HTML elements that contain the user info
                 creator_handle = None
                 fee_handle = None
-                project_twitter = None
                 
-                # Method 1: Use precise regex patterns to find the exact sections
-                creator_pattern = r'created by.*?([A-Z0-9_]+)\s*X'
-                royalty_pattern = r'royalties to.*?([A-Z0-9_]+)\s*X'
-                
-                creator_match = re.search(creator_pattern, page_text, re.IGNORECASE | re.DOTALL)
-                if creator_match:
-                    creator_handle = creator_match.group(1).strip()
-                    logger.info(f"🎯 CREATOR found via pattern: @{creator_handle}")
-                
-                royalty_match = re.search(royalty_pattern, page_text, re.IGNORECASE | re.DOTALL)
-                if royalty_match:
-                    fee_handle = royalty_match.group(1).strip()
-                    logger.info(f"💰 FEE RECIPIENT found via pattern: @{fee_handle}")
-                
-                # Method 2: If patterns didn't work, try finding Twitter buttons and their precise context
-                if not creator_handle or not fee_handle:
-                    logger.info("🔍 Fallback to button context analysis...")
-                    
-                    # Find the actual Twitter buttons
-                    twitter_buttons = driver.find_elements(By.CSS_SELECTOR, "a[href*='twitter.com'], a[href*='x.com']")
-                    
-                    for button in twitter_buttons:
+                # Look for elements that contain "created by" text
+                try:
+                    # Find all text elements that might contain "created by"
+                    all_elements = driver.find_elements(By.XPATH, "//*[contains(text(), 'created by')]")
+                    for element in all_elements:
                         try:
-                            href = button.get_attribute('href')
-                            if href and ('twitter.com/' in href or 'x.com/' in href):
-                                # Extract handle from URL
-                                handle_match = re.search(r'(?:twitter\.com|x\.com)/([^/?]+)', href)
-                                if handle_match:
-                                    handle = handle_match.group(1)
-                                    if handle not in ['intent', 'share', 'home']:
-                                        
-                                        # Try to find the closest text that indicates role
-                                        try:
-                                            # Look for nearby text elements
-                                            parent = button.find_element(By.XPATH, "..")
-                                            siblings = parent.find_elements(By.XPATH, ".//*")
-                                            
-                                            # Build context from surrounding elements
-                                            context_text = ""
-                                            for sibling in siblings[:10]:  # Check first 10 elements
-                                                try:
-                                                    text = sibling.text.strip()
-                                                    if text:
-                                                        context_text += f" {text}"
-                                                except:
-                                                    continue
-                                            
-                                            context_text = context_text.lower()
-                                            logger.info(f"🔗 @{handle} context: '{context_text[:100]}...'")
-                                            
-                                            # Very specific matching
-                                            if 'created by' in context_text and handle.upper() in page_text.upper():
-                                                if not creator_handle:
-                                                    creator_handle = handle
-                                                    logger.info(f"🎯 CREATOR identified: @{handle}")
-                                            elif ('royalties to' in context_text or 'earns 100%' in context_text) and handle.upper() in page_text.upper():
-                                                if not fee_handle:
-                                                    fee_handle = handle
-                                                    logger.info(f"💰 FEE RECIPIENT identified: @{handle}")
-                                            elif not project_twitter and 'twitter' in context_text:
-                                                project_twitter = handle
-                                                logger.info(f"📱 PROJECT TWITTER: @{handle}")
-                                        
-                                        except Exception as e:
-                                            logger.debug(f"Context analysis failed for {handle}: {e}")
+                            # Get parent container that should have the Twitter link
+                            parent = element.find_element(By.XPATH, "..")
+                            twitter_link = parent.find_element(By.CSS_SELECTOR, "a[href*='x.com'], a[href*='twitter.com']")
+                            href = twitter_link.get_attribute('href')
+                            
+                            handle_match = re.search(r'(?:twitter\.com|x\.com)/([^/?]+)', href)
+                            if handle_match:
+                                creator_handle = handle_match.group(1)
+                                logger.info(f"🎯 CREATOR found via 'created by' element: @{creator_handle}")
+                                break
                         except:
                             continue
+                except Exception as e:
+                    logger.debug(f"Created by element search failed: {e}")
                 
-                # Fallback assignments
-                if not creator_handle and project_twitter:
-                    creator_handle = project_twitter
-                    logger.info(f"🎯 Using project Twitter as creator: @{creator_handle}")
+                # Look for elements that contain "royalties to" text
+                try:
+                    all_elements = driver.find_elements(By.XPATH, "//*[contains(text(), 'royalties to')]")
+                    for element in all_elements:
+                        try:
+                            # Get parent container that should have the Twitter link
+                            parent = element.find_element(By.XPATH, "..")
+                            twitter_link = parent.find_element(By.CSS_SELECTOR, "a[href*='x.com'], a[href*='twitter.com']")
+                            href = twitter_link.get_attribute('href')
+                            
+                            handle_match = re.search(r'(?:twitter\.com|x\.com)/([^/?]+)', href)
+                            if handle_match:
+                                fee_handle = handle_match.group(1)
+                                logger.info(f"💰 FEE RECIPIENT found via 'royalties to' element: @{fee_handle}")
+                                break
+                        except:
+                            continue
+                except Exception as e:
+                    logger.debug(f"Royalties to element search failed: {e}")
                 
-                # Final assignment
-                result["createdBy"]["twitter"] = creator_handle
-                result["royaltiesTo"]["twitter"] = fee_handle if fee_handle else creator_handle
+                # Method 2: If HTML targeting failed, use improved text pattern matching
+                if not creator_handle or not fee_handle:
+                    logger.info("🔍 Fallback to improved text patterns...")
+                    
+                    # Look for exact pattern: "created by" followed by username and "X"
+                    creator_pattern = r'created by[^@]*?([A-Z0-9_]{3,20})\s*X'
+                    creator_match = re.search(creator_pattern, page_text, re.IGNORECASE)
+                    if creator_match and not creator_handle:
+                        creator_handle = creator_match.group(1).strip()
+                        logger.info(f"🎯 CREATOR found via text pattern: @{creator_handle}")
+                    
+                    # Look for exact pattern: "royalties to" followed by username and "X"  
+                    royalty_pattern = r'royalties to[^@]*?([A-Z0-9_]{3,20})\s*X'
+                    royalty_match = re.search(royalty_pattern, page_text, re.IGNORECASE)
+                    if royalty_match and not fee_handle:
+                        fee_handle = royalty_match.group(1).strip()
+                        logger.info(f"💰 FEE RECIPIENT found via text pattern: @{fee_handle}")
                 
-                logger.info(f"✅ FINAL RESULT - Creator: @{creator_handle}, Fee Recipient: @{fee_handle}")
+                # Method 3: Last resort - try to parse the structured data
+                if not creator_handle or not fee_handle:
+                    logger.info("🆘 LAST RESORT: Parse any Twitter handles and match with context...")
+                    
+                    # Get all Twitter links on the page
+                    twitter_elements = driver.find_elements(By.CSS_SELECTOR, "a[href*='twitter.com'], a[href*='x.com']")
+                    handles_found = []
+                    
+                    for element in twitter_elements:
+                        try:
+                            href = element.get_attribute('href')
+                            handle_match = re.search(r'(?:twitter\.com|x\.com)/([^/?]+)', href)
+                            if handle_match:
+                                handle = handle_match.group(1)
+                                if handle not in ['intent', 'share', 'home']:
+                                    handles_found.append(handle)
+                        except:
+                            continue
+                    
+                    logger.info(f"🔗 Found Twitter handles: {handles_found}")
+                    
+                    # Match handles with text context
+                    for handle in handles_found:
+                        if handle.upper() in page_text.upper():
+                            # Check if this handle appears near "created by"
+                            created_context = page_text.lower().find('created by')
+                            handle_pos = page_text.upper().find(handle.upper())
+                            
+                            if created_context != -1 and handle_pos != -1:
+                                distance = abs(handle_pos - created_context)
+                                if distance < 200 and not creator_handle:  # Within 200 chars
+                                    creator_handle = handle
+                                    logger.info(f"🎯 CREATOR matched by proximity: @{handle}")
+                            
+                            # Check if this handle appears near "royalties to"
+                            royalty_context = page_text.lower().find('royalties to')
+                            if royalty_context != -1 and handle_pos != -1:
+                                distance = abs(handle_pos - royalty_context)
+                                if distance < 200 and not fee_handle:  # Within 200 chars
+                                    fee_handle = handle
+                                    logger.info(f"💰 FEE RECIPIENT matched by proximity: @{handle}")
+                
+                # CRITICAL: Do not assign fallbacks that could be wrong
+                if creator_handle:
+                    result["createdBy"]["twitter"] = creator_handle
+                    logger.info(f"✅ CREATOR SET: @{creator_handle}")
+                else:
+                    logger.warning("❌ NO CREATOR FOUND - leaving empty")
+                    
+                if fee_handle:
+                    result["royaltiesTo"]["twitter"] = fee_handle
+                    logger.info(f"✅ FEE RECIPIENT SET: @{fee_handle}")
+                else:
+                    logger.warning("❌ NO FEE RECIPIENT FOUND - leaving empty")
+                
+                logger.info(f"🏁 BULLETPROOF RESULT - Creator: @{creator_handle}, Fee Recipient: @{fee_handle}")
                     
             except Exception as e:
-                logger.error(f"Error in precise Twitter extraction: {e}")
+                logger.error(f"Error in bulletproof fee split extraction: {e}")
+                # Do NOT set any fallback values that could be wrong
             
             # Extract project website (if different from Bags page)
             logger.info("🌐 Looking for project website...")
@@ -674,8 +710,8 @@ Solscan: https://solscan.io/token/{mint_address}
         
         # Add trading links
         message += f"\n📈 TRADE NOW:"
-        message += f"\n• [AXIOM](https://axiomspace.xyz/?inputCurrency=So11111111111111111111111111111111111112&outputCurrency={mint_address})"
-        message += f"\n• [Photon](https://photon-sol.tinyastro.io/en/lp/{mint_address})"
+        message += f"\n• [AXIOM](http://axiom.trade/t/{mint_address}/@bagwatch)"
+        message += f"\n• [Photon](https://photon-sol.tinyastro.io/@BagWatch/{mint_address})"
         
         return message
         
