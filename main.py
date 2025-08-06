@@ -123,8 +123,8 @@ def clean_twitter_handle(handle: str) -> str:
     
     return cleaned
 
-def get_helius_token_name(mint_address: str) -> Optional[str]:
-    """Get proper token name from Helius API"""
+def get_helius_metadata(mint_address: str) -> Dict:
+    """Get complete metadata from Helius API including name, website, social"""
     try:
         # Use Helius getAsset API for metadata
         payload = {
@@ -143,18 +143,66 @@ def get_helius_token_name(mint_address: str) -> Optional[str]:
             if asset_data:
                 content = asset_data.get("content", {})
                 metadata = content.get("metadata", {})
-                name = metadata.get("name")
                 
+                helius_data = {
+                    "name": None,
+                    "website": None,
+                    "twitter": None
+                }
+                
+                # Get token name
+                name = metadata.get("name")
                 if name and name.strip() and name != mint_address:
-                    logger.info(f"✅ Helius found name: {name}")
-                    return name.strip()
+                    helius_data["name"] = name.strip()
+                    logger.info(f"✅ Helius name: {name}")
+                
+                # Get project website from metadata
+                website = metadata.get("external_url") or metadata.get("website")
+                if website and website.strip():
+                    helius_data["website"] = website.strip()
+                    logger.info(f"✅ Helius website: {website}")
+                
+                # Get Twitter from metadata attributes or properties
+                attributes = metadata.get("attributes", [])
+                for attr in attributes:
+                    if isinstance(attr, dict):
+                        trait_type = attr.get("trait_type", "").lower()
+                        value = attr.get("value", "")
+                        
+                        if "twitter" in trait_type or "x" in trait_type:
+                            # Clean Twitter handle
+                            if value and isinstance(value, str):
+                                clean_handle = value.replace("@", "").replace("https://twitter.com/", "").replace("https://x.com/", "").strip()
+                                if clean_handle:
+                                    helius_data["twitter"] = clean_handle
+                                    logger.info(f"✅ Helius Twitter: @{clean_handle}")
+                        elif "website" in trait_type and not helius_data["website"]:
+                            if value and isinstance(value, str) and value.startswith("http"):
+                                helius_data["website"] = value
+                                logger.info(f"✅ Helius website from attributes: {value}")
+                
+                # Also check links section
+                links = content.get("links", {})
+                if isinstance(links, dict):
+                    if not helius_data["website"] and links.get("external_url"):
+                        helius_data["website"] = links["external_url"]
+                        logger.info(f"✅ Helius website from links: {links['external_url']}")
+                    
+                    if not helius_data["twitter"] and links.get("twitter"):
+                        twitter_url = links["twitter"]
+                        if "twitter.com/" in twitter_url or "x.com/" in twitter_url:
+                            handle = twitter_url.split("/")[-1]
+                            helius_data["twitter"] = handle
+                            logger.info(f"✅ Helius Twitter from links: @{handle}")
+                
+                return helius_data
         
-        logger.debug("No valid name from Helius")
-        return None
+        logger.debug("No valid metadata from Helius")
+        return {"name": None, "website": None, "twitter": None}
         
     except Exception as e:
-        logger.debug(f"Helius name lookup failed: {e}")
-        return None
+        logger.debug(f"Helius metadata lookup failed: {e}")
+        return {"name": None, "website": None, "twitter": None}
 
 def fetch_bags_token_data(mint_address: str) -> Optional[Dict]:
     """Fetch token data from Bags website using browser automation"""
@@ -359,13 +407,25 @@ def fetch_bags_token_data(mint_address: str) -> Optional[Dict]:
                     result["symbol"] = f"${dollar_symbols[0]}"
                     logger.info(f"✅ Found ticker: {result['symbol']}")
                 
-                # If we found a $ pattern, also try to get the proper name from Helius
+                # If we found a $ pattern, also try to get the complete metadata from Helius
                 if dollar_symbols:
-                    logger.info(f"🔍 Getting proper token name from Helius for {mint_address}")
-                    helius_name = get_helius_token_name(mint_address)
-                    if helius_name and helius_name != "Unknown Token":
-                        result["name"] = helius_name
-                        logger.info(f"✅ Helius token name: {helius_name}")
+                    logger.info(f"🔍 Getting complete metadata from Helius for {mint_address}")
+                    helius_metadata = get_helius_metadata(mint_address)
+                    
+                    # Use Helius name if available
+                    if helius_metadata["name"] and helius_metadata["name"] != "Unknown Token":
+                        result["name"] = helius_metadata["name"]
+                        logger.info(f"✅ Using Helius token name: {helius_metadata['name']}")
+                    
+                    # Use Helius website if available
+                    if helius_metadata["website"]:
+                        result["website"] = helius_metadata["website"]
+                        logger.info(f"✅ Using Helius website: {helius_metadata['website']}")
+                    
+                    # Store Helius Twitter for later comparison with creator
+                    helius_twitter = helius_metadata["twitter"]
+                    if helius_twitter:
+                        logger.info(f"✅ Found Helius project Twitter: @{helius_twitter}")
                     
             except Exception as e:
                 logger.debug(f"Error extracting ticker: {e}")
@@ -449,23 +509,61 @@ def fetch_bags_token_data(mint_address: str) -> Optional[Dict]:
             except Exception as e:
                 logger.error(f"Error in enhanced Twitter extraction: {e}")
             
+            # Extract project website (if different from Bags page)
+            logger.info("🌐 Looking for project website...")
+            try:
+                # Look for website links that aren't Bags, Twitter, or common domains
+                website_elements = driver.find_elements(By.CSS_SELECTOR, "a[href*='http']")
+                for element in website_elements:
+                    try:
+                        href = element.get_attribute('href')
+                        if href and href.startswith('http'):
+                            # Skip Bags, Twitter, and trading links
+                            if not any(domain in href.lower() for domain in [
+                                'bags.fm', 'twitter.com', 'x.com', 'solscan.io', 
+                                'axiomspace.xyz', 'photon-sol.tinyastro.io'
+                            ]):
+                                # Check if this looks like a project website
+                                context = element.text.strip().lower()
+                                parent_context = ""
+                                try:
+                                    parent_context = element.find_element(By.XPATH, "..").text.strip().lower()
+                                except:
+                                    pass
+                                
+                                # Look for website indicators
+                                if any(indicator in f"{context} {parent_context}" for indicator in [
+                                    'website', 'site', 'web', 'official', 'project'
+                                ]) or len(context) == 0:  # Empty text often indicates website icon
+                                    result["website"] = href
+                                    logger.info(f"✅ Found project website: {href}")
+                                    break
+                    except:
+                        continue
+            except Exception as e:
+                logger.debug(f"Error extracting website: {e}")
+            
             # Extract royalty percentage
-            all_elements = driver.find_elements(By.CSS_SELECTOR, "*")
-            for element in all_elements:
-                try:
-                    text = element.text
-                    if '%' in text:
-                        percent_matches = re.findall(r'(\d+(?:\.\d+)?)%', text)
-                        for match in percent_matches:
-                            pct = float(match)
-                            if 0 < pct <= 50:
-                                result["royaltyPercentage"] = pct
-                                logger.info(f"✅ Found royalty: {pct}%")
-                                break
-                except:
-                    continue
-                if result["royaltyPercentage"]:
-                    break
+            logger.info("💰 Looking for royalty percentage...")
+            try:
+                all_elements = driver.find_elements(By.CSS_SELECTOR, "*")
+                for element in all_elements:
+                    try:
+                        text = element.text
+                        if '%' in text:
+                            percent_matches = re.findall(r'(\d+(?:\.\d+)?)%', text)
+                            for match in percent_matches:
+                                pct = float(match)
+                                if 0 < pct <= 50:
+                                    result["royaltyPercentage"] = pct
+                                    logger.info(f"✅ Found royalty: {pct}%")
+                                    break
+                    except:
+                        continue
+                    if result["royaltyPercentage"]:
+                        break
+            except Exception as e:
+                logger.debug(f"Error extracting royalty: {e}")
             
             logger.info(f"✅ Successfully extracted Bags data for {mint_address}")
             return result
@@ -536,11 +634,15 @@ Solscan: https://solscan.io/token/{mint_address}
         if royalty_percentage is not None:
             message += f"\nRoyalty: {royalty_percentage}%"
         
-        # Add website
-        message += f"\nWebsite: https://bags.fm/{mint_address}"
+        # Add project website if available (separate from Bags)
+        if website and website != f"https://bags.fm/{mint_address}" and not website.startswith("https://bags.fm/"):
+            message += f"\nWebsite: {website}"
+        
+        # Add clean Bags link (not the long URL)
+        message += f"\n\n🎒 [View on Bags](https://bags.fm/{mint_address})"
         
         # Add trading links
-        message += f"\n\n📈 TRADE NOW:"
+        message += f"\n📈 TRADE NOW:"
         message += f"\n• [AXIOM](https://axiomspace.xyz/?inputCurrency=So11111111111111111111111111111111111112&outputCurrency={mint_address})"
         message += f"\n• [Photon](https://photon-sol.tinyastro.io/en/lp/{mint_address})"
         
