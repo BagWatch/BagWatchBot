@@ -416,16 +416,23 @@ def on_websocket_message(ws, message):
             
             # Log all transactions for debugging
             logs = result.get("logs", [])
-            if any("metaq" in log.lower() for log in logs):
-                logger.info(f"Metaplex transaction detected with {len(logs)} logs")
-                logger.debug(f"Transaction logs: {logs[:3]}...")  # First 3 logs
+            subscription_id = params.get("subscription", "unknown")
             
-            # Parse the log message
-            mint_address = parse_log_message(result)
-            if mint_address:
-                logger.info(f"🎯 BAGS TOKEN DETECTED: {mint_address}")
-                # Process in background
-                asyncio.create_task(process_new_token(mint_address))
+            # Check if this is from any of our subscriptions or contains metaplex activity
+            if any("metaq" in log.lower() for log in logs):
+                logger.info(f"📋 LOG NOTIFICATION - Subscription: {subscription_id}")
+                logger.info(f"Metaplex transaction detected with {len(logs)} logs")
+                if len(logs) > 0:
+                    logger.info(f"First log: {logs[0][:100]}...")  # First 100 chars
+                
+                # Parse the log message
+                mint_address = parse_log_message(result)
+                if mint_address:
+                    logger.info(f"🎯 BAGS TOKEN DETECTED: {mint_address}")
+                    # Process in background
+                    asyncio.create_task(process_new_token(mint_address))
+                else:
+                    logger.debug("No Bags token found in this transaction")
         
         # Handle program account notifications
         elif "method" in data and data["method"] == "programNotification":
@@ -611,6 +618,32 @@ async def main():
             logger.warning(f"Failed to fetch recent transactions: {response.status_code}")
     except Exception as e:
         logger.warning(f"Error testing recent transactions: {e}")
+    
+    # Test Telegram posting with a sample token (for debugging)
+    if os.getenv("TEST_MODE") == "true":
+        logger.info("🧪 TEST MODE: Sending sample token post...")
+        try:
+            test_message = """🚀 *Test Token Launch*
+
+*Name:* Sample Token
+*Ticker:* TEST
+*Contract:* `SampleMintAddress123456789`
+[View on Solscan](https://solscan.io/token/SampleMintAddress123456789)
+
+*Twitter:* [@testtoken](https://x.com/testtoken)
+*Royalty:* 5%
+
+🧪 This is a test message from BagWatch Bot"""
+
+            await telegram_bot.send_message(
+                chat_id=CHANNEL_ID,
+                text=test_message,
+                parse_mode=ParseMode.MARKDOWN_V2,
+                disable_web_page_preview=False
+            )
+            logger.info("✅ Test message sent successfully!")
+        except Exception as e:
+            logger.error(f"❌ Test message failed: {e}")
     
     # Start WebSocket monitoring
     ws_thread = start_websocket()
