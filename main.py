@@ -124,7 +124,7 @@ def clean_twitter_handle(handle: str) -> str:
     return cleaned
 
 def get_helius_metadata(mint_address: str) -> Dict:
-    """Get complete metadata from Helius API including name, website, social"""
+    """Get complete metadata from Helius API including name, symbol, image, website, social"""
     try:
         # Use Helius getAsset API for metadata
         payload = {
@@ -146,6 +146,8 @@ def get_helius_metadata(mint_address: str) -> Dict:
                 
                 helius_data = {
                     "name": None,
+                    "symbol": None,
+                    "image": None,
                     "website": None,
                     "twitter": None
                 }
@@ -155,6 +157,18 @@ def get_helius_metadata(mint_address: str) -> Dict:
                 if name and name.strip() and name != mint_address:
                     helius_data["name"] = name.strip()
                     logger.info(f"✅ Helius name: {name}")
+                
+                # Get token symbol
+                symbol = metadata.get("symbol")
+                if symbol and symbol.strip():
+                    helius_data["symbol"] = symbol.strip()
+                    logger.info(f"✅ Helius symbol: {symbol}")
+                
+                # Get token image
+                image = metadata.get("image")
+                if image and image.strip():
+                    helius_data["image"] = image.strip()
+                    logger.info(f"✅ Helius image: {image}")
                 
                 # Get project website from metadata
                 website = metadata.get("external_url") or metadata.get("website")
@@ -198,11 +212,11 @@ def get_helius_metadata(mint_address: str) -> Dict:
                 return helius_data
         
         logger.debug("No valid metadata from Helius")
-        return {"name": None, "website": None, "twitter": None}
+        return {"name": None, "symbol": None, "image": None, "website": None, "twitter": None}
         
     except Exception as e:
         logger.debug(f"Helius metadata lookup failed: {e}")
-        return {"name": None, "website": None, "twitter": None}
+        return {"name": None, "symbol": None, "image": None, "website": None, "twitter": None}
 
 def fetch_bags_token_data(mint_address: str) -> Optional[Dict]:
     """Fetch token data from Bags website using browser automation"""
@@ -395,119 +409,136 @@ def fetch_bags_token_data(mint_address: str) -> Optional[Dict]:
                 except:
                     pass
             
-            # Extract ticker/symbol (the $ version) from page
-            logger.info("🔤 Looking for ticker symbol...")
+            # Always get complete metadata from Helius (primary data source)
+            logger.info(f"🔍 Getting complete metadata from Helius for {mint_address}")
+            helius_metadata = get_helius_metadata(mint_address)
+            
+            # Use Helius data as primary source for main token info
+            if helius_metadata["name"] and helius_metadata["name"] != "Unknown Token":
+                result["name"] = helius_metadata["name"]
+                logger.info(f"✅ Using Helius token name: {helius_metadata['name']}")
+            
+            if helius_metadata["symbol"] and helius_metadata["symbol"].strip():
+                result["symbol"] = helius_metadata["symbol"]
+                logger.info(f"✅ Using Helius symbol: {helius_metadata['symbol']}")
+            
+            if helius_metadata["image"] and helius_metadata["image"].strip():
+                result["image"] = helius_metadata["image"]
+                logger.info(f"✅ Using Helius image: {helius_metadata['image']}")
+            
+            if helius_metadata["website"]:
+                result["website"] = helius_metadata["website"]
+                logger.info(f"✅ Using Helius website: {helius_metadata['website']}")
+            
+            # Store Helius Twitter for reference
+            helius_twitter = helius_metadata["twitter"]
+            if helius_twitter:
+                logger.info(f"✅ Found Helius project Twitter: @{helius_twitter}")
+            
+            # Extract ticker from Bags page ($ version) as backup/supplement
             try:
-                page_text = driver.find_element(By.TAG_NAME, "body").text
+                dollar_symbols = re.findall(r'\$([A-Z0-9]+)', page_text)
+                dollar_symbols = [clean_ticker(sym) for sym in dollar_symbols if len(sym) <= 10 and sym != mint_address[:10]]
                 
-                # Look for $SYMBOL patterns which should be the ticker
-                dollar_symbols = re.findall(r'\$([A-Z0-9]{2,20})', page_text)
                 if dollar_symbols:
-                    # Use the $ version as the ticker
-                    result["symbol"] = f"${dollar_symbols[0]}"
-                    logger.info(f"✅ Found ticker: {result['symbol']}")
-                
-                # If we found a $ pattern, also try to get the complete metadata from Helius
-                if dollar_symbols:
-                    logger.info(f"🔍 Getting complete metadata from Helius for {mint_address}")
-                    helius_metadata = get_helius_metadata(mint_address)
-                    
-                    # Use Helius name if available
-                    if helius_metadata["name"] and helius_metadata["name"] != "Unknown Token":
-                        result["name"] = helius_metadata["name"]
-                        logger.info(f"✅ Using Helius token name: {helius_metadata['name']}")
-                    
-                    # Use Helius website if available
-                    if helius_metadata["website"]:
-                        result["website"] = helius_metadata["website"]
-                        logger.info(f"✅ Using Helius website: {helius_metadata['website']}")
-                    
-                    # Store Helius Twitter for later comparison with creator
-                    helius_twitter = helius_metadata["twitter"]
-                    if helius_twitter:
-                        logger.info(f"✅ Found Helius project Twitter: @{helius_twitter}")
+                    # If no symbol from Helius, use the $ version as ticker
+                    if not result["symbol"]:
+                        result["symbol"] = f"${dollar_symbols[0]}"
+                        logger.info(f"✅ Using Bags ticker: {result['symbol']}")
                     
             except Exception as e:
                 logger.debug(f"Error extracting ticker: {e}")
             
-            # Enhanced Twitter/Creator extraction for Bags page format
-            logger.info("🐦 Looking for creator and fee recipient...")
+            # Enhanced Twitter/Creator extraction using precise text patterns
+            logger.info("🐦 Looking for creator and fee recipient with precise matching...")
             try:
-                page_text = driver.find_element(By.TAG_NAME, "body").text
+                logger.info(f"📄 Page text sample: {page_text[:500]}...")
                 
-                # Look for "created by" and "royalties to" patterns specific to Bags
                 creator_handle = None
                 fee_handle = None
-                project_social = None
+                project_twitter = None
                 
-                # Find Twitter links and their context
-                twitter_elements = driver.find_elements(By.CSS_SELECTOR, "a[href*='twitter.com'], a[href*='x.com']")
+                # Method 1: Use precise regex patterns to find the exact sections
+                creator_pattern = r'created by.*?([A-Z0-9_]+)\s*X'
+                royalty_pattern = r'royalties to.*?([A-Z0-9_]+)\s*X'
                 
-                for element in twitter_elements:
-                    try:
-                        href = element.get_attribute('href')
-                        if href:
-                            match = re.search(r'(?:twitter\.com|x\.com)/([^/?]+)', href)
-                            if match:
-                                handle = match.group(1)
-                                if handle not in ['intent', 'share', 'home']:
-                                    # Get surrounding context to determine role
-                                    try:
-                                        # Check parent elements for context
-                                        parent = element.find_element(By.XPATH, "..")
-                                        grandparent = parent.find_element(By.XPATH, "..")
-                                        great_grandparent = grandparent.find_element(By.XPATH, "..")
-                                        context = f"{parent.text} {grandparent.text} {great_grandparent.text}".lower()
+                creator_match = re.search(creator_pattern, page_text, re.IGNORECASE | re.DOTALL)
+                if creator_match:
+                    creator_handle = creator_match.group(1).strip()
+                    logger.info(f"🎯 CREATOR found via pattern: @{creator_handle}")
+                
+                royalty_match = re.search(royalty_pattern, page_text, re.IGNORECASE | re.DOTALL)
+                if royalty_match:
+                    fee_handle = royalty_match.group(1).strip()
+                    logger.info(f"💰 FEE RECIPIENT found via pattern: @{fee_handle}")
+                
+                # Method 2: If patterns didn't work, try finding Twitter buttons and their precise context
+                if not creator_handle or not fee_handle:
+                    logger.info("🔍 Fallback to button context analysis...")
+                    
+                    # Find the actual Twitter buttons
+                    twitter_buttons = driver.find_elements(By.CSS_SELECTOR, "a[href*='twitter.com'], a[href*='x.com']")
+                    
+                    for button in twitter_buttons:
+                        try:
+                            href = button.get_attribute('href')
+                            if href and ('twitter.com/' in href or 'x.com/' in href):
+                                # Extract handle from URL
+                                handle_match = re.search(r'(?:twitter\.com|x\.com)/([^/?]+)', href)
+                                if handle_match:
+                                    handle = handle_match.group(1)
+                                    if handle not in ['intent', 'share', 'home']:
                                         
-                                        logger.info(f"🔗 Twitter handle @{handle} with context: '{context[:150]}...'")
-                                        
-                                        # Priority 1: Look for explicit "created by" patterns
-                                        if any(keyword in context for keyword in ['created by', 'earns 100%']):
-                                            creator_handle = handle
-                                            logger.info(f"🎯 CREATOR (created by): @{handle}")
-                                        # Priority 2: Look for fee split patterns
-                                        elif any(keyword in context for keyword in ['royalties to', 'fees to', 'earns']) and 'created by' not in context:
-                                            fee_handle = handle
-                                            logger.info(f"💰 FEE RECIPIENT (royalties to): @{handle}")
-                                        # Priority 3: Just "twitter" or social context
-                                        elif any(keyword in context for keyword in ['twitter', 'social', 'website']) and not creator_handle:
-                                            # This might be project social, not creator
-                                            project_social = handle
-                                            logger.info(f"📱 PROJECT SOCIAL: @{handle}")
-                                        # Fallback: assign by order if no clear context
-                                        elif not creator_handle:
-                                            creator_handle = handle
-                                            logger.info(f"🎯 Default creator assignment: @{handle}")
-                                        elif not fee_handle:
-                                            fee_handle = handle
-                                            logger.info(f"💰 Default fee recipient assignment: @{handle}")
+                                        # Try to find the closest text that indicates role
+                                        try:
+                                            # Look for nearby text elements
+                                            parent = button.find_element(By.XPATH, "..")
+                                            siblings = parent.find_elements(By.XPATH, ".//*")
                                             
-                                    except:
-                                        # Simple fallback: just collect the handle
-                                        if not creator_handle:
-                                            creator_handle = handle
-                                        elif not fee_handle:
-                                            fee_handle = handle
-                    except:
-                        continue
+                                            # Build context from surrounding elements
+                                            context_text = ""
+                                            for sibling in siblings[:10]:  # Check first 10 elements
+                                                try:
+                                                    text = sibling.text.strip()
+                                                    if text:
+                                                        context_text += f" {text}"
+                                                except:
+                                                    continue
+                                            
+                                            context_text = context_text.lower()
+                                            logger.info(f"🔗 @{handle} context: '{context_text[:100]}...'")
+                                            
+                                            # Very specific matching
+                                            if 'created by' in context_text and handle.upper() in page_text.upper():
+                                                if not creator_handle:
+                                                    creator_handle = handle
+                                                    logger.info(f"🎯 CREATOR identified: @{handle}")
+                                            elif ('royalties to' in context_text or 'earns 100%' in context_text) and handle.upper() in page_text.upper():
+                                                if not fee_handle:
+                                                    fee_handle = handle
+                                                    logger.info(f"💰 FEE RECIPIENT identified: @{handle}")
+                                            elif not project_twitter and 'twitter' in context_text:
+                                                project_twitter = handle
+                                                logger.info(f"📱 PROJECT TWITTER: @{handle}")
+                                        
+                                        except Exception as e:
+                                            logger.debug(f"Context analysis failed for {handle}: {e}")
+                        except:
+                            continue
                 
-                # Logic: If we only found project social but no explicit creator, 
-                # the project social is probably the creator
-                if not creator_handle and project_social:
-                    creator_handle = project_social
-                    logger.info(f"🎯 Using project social as creator: @{creator_handle}")
+                # Fallback assignments
+                if not creator_handle and project_twitter:
+                    creator_handle = project_twitter
+                    logger.info(f"🎯 Using project Twitter as creator: @{creator_handle}")
                 
-                # Assign the handles
+                # Final assignment
                 result["createdBy"]["twitter"] = creator_handle
                 result["royaltiesTo"]["twitter"] = fee_handle if fee_handle else creator_handle
                 
-                if creator_handle or fee_handle:
-                    logger.info(f"✅ Final assignment - Creator: @{creator_handle}, Fee Recipient: @{fee_handle}")
-                else:
-                    logger.warning("❌ No Twitter handles found")
+                logger.info(f"✅ FINAL RESULT - Creator: @{creator_handle}, Fee Recipient: @{fee_handle}")
                     
             except Exception as e:
-                logger.error(f"Error in enhanced Twitter extraction: {e}")
+                logger.error(f"Error in precise Twitter extraction: {e}")
             
             # Extract project website (if different from Bags page)
             logger.info("🌐 Looking for project website...")
