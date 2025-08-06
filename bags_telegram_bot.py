@@ -587,33 +587,33 @@ Contract: {mint_address}
                     logger.info(f"Twitter analysis - Creator: '{creator_clean}', Fee Recipient: '{fee_clean}'")
                     
                     if creator_clean and fee_clean and creator_clean.lower() != fee_clean.lower():
-                        # CREATOR FEE SPLIT - Different people
-                        enhanced_message += f"\n👤 Creator: [@{creator_clean}](https://x.com/{creator_clean})"
-                        enhanced_message += f"\n💰 Creator Fees: [@{fee_clean}](https://x.com/{fee_clean})"
+                        # BAGS FEE SPLIT - Always 10% creator, 90% chosen account
+                        enhanced_message += f"\n👤 Creator: [@{creator_clean}](https://x.com/{creator_clean}) (10% of fees)"
+                        enhanced_message += f"\n💰 Fee Split: [@{fee_clean}](https://x.com/{fee_clean}) (90% of fees)"
                         twitter_section_added = True
-                        logger.info(f"✅ CREATOR FEE SPLIT detected - Creator: @{creator_clean}, Fee Recipient: @{fee_clean}")
+                        logger.info(f"✅ BAGS FEE SPLIT detected - Creator: @{creator_clean} (10%), Fee Split: @{fee_clean} (90%)")
                     elif creator_clean and fee_clean and creator_clean.lower() == fee_clean.lower():
-                        # Same person for both creator and fees
+                        # Same person for both creator and fees (no split)
                         enhanced_message += f"\n👤 Creator: [@{creator_clean}](https://x.com/{creator_clean})"
-                        enhanced_message += f"\n💰 Creator Fees: Same as creator"
+                        enhanced_message += f"\n💰 Fee Split: All fees to creator (no split)"
                         twitter_section_added = True
-                        logger.info(f"✅ Same person for creator and fees: @{creator_clean}")
+                        logger.info(f"✅ No fee split - all fees to creator: @{creator_clean}")
                     elif creator_clean and not fee_clean:
-                        # Only creator Twitter available
+                        # Only creator Twitter available (likely no fee split)
                         enhanced_message += f"\n👤 Creator: [@{creator_clean}](https://x.com/{creator_clean})"
-                        enhanced_message += f"\n💰 Creator Fees: Unknown recipient"
+                        enhanced_message += f"\n💰 Fee Split: All fees to creator (no split)"
                         twitter_section_added = True
-                        logger.info(f"✅ Only creator Twitter available: @{creator_clean}")
+                        logger.info(f"✅ Only creator available, no fee split: @{creator_clean}")
                     elif not creator_clean and fee_clean:
-                        # Only fee recipient Twitter available
+                        # Only fee recipient Twitter available (unusual case)
                         enhanced_message += f"\n👤 Creator: Unknown"
-                        enhanced_message += f"\n💰 Creator Fees: [@{fee_clean}](https://x.com/{fee_clean})"
+                        enhanced_message += f"\n💰 Fee Split: [@{fee_clean}](https://x.com/{fee_clean}) (likely 90% split)"
                         twitter_section_added = True
-                        logger.info(f"✅ Only fee recipient Twitter available: @{fee_clean}")
+                        logger.info(f"✅ Only fee recipient available: @{fee_clean}")
                     elif not creator_clean and not fee_clean:
                         # No Twitter info available
                         enhanced_message += f"\n👤 Creator: Unknown"
-                        enhanced_message += f"\n💰 Creator Fees: Unknown recipient"
+                        enhanced_message += f"\n💰 Fee Split: Unknown"
                         twitter_section_added = True
                         logger.warning(f"❌ No Twitter information found for token {mint_address}")
                     
