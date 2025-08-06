@@ -30,6 +30,14 @@ import requests
 from telegram import Bot
 from telegram.constants import ParseMode
 import websockets
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from webdriver_manager.chrome import ChromeDriverManager
+import re
 
 # ============================================================================
 # CONFIGURATION
@@ -116,29 +124,236 @@ def clean_twitter_handle(handle: str) -> str:
     return cleaned
 
 def fetch_bags_token_data(mint_address: str) -> Optional[Dict]:
-    """Fetch token data from Bags API"""
+    """Fetch token data from Bags website using browser automation"""
     try:
-        url = f"{BAGS_API_BASE}/{mint_address}"
-        logger.info(f"Fetching token data from Bags API: {url}")
+        logger.info(f"🚀 Browser scraping Bags page: https://bags.fm/{mint_address}")
         
-        response = requests.get(url, timeout=10)
-        response.raise_for_status()
+        # OPTIMIZED Chrome options for speed
+        chrome_options = Options()
+        chrome_options.add_argument("--headless")
+        chrome_options.add_argument("--no-sandbox")
+        chrome_options.add_argument("--disable-dev-shm-usage")
+        chrome_options.add_argument("--disable-gpu")
+        chrome_options.add_argument("--window-size=1920,1080")
+        chrome_options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+        chrome_options.add_argument("--disable-logging")
+        chrome_options.add_argument("--log-level=3")
+        # Performance optimizations
+        chrome_options.add_argument("--disable-plugins")
+        chrome_options.add_argument("--disable-extensions")
+        chrome_options.add_argument("--disable-background-timer-throttling")
+        chrome_options.add_argument("--aggressive-cache-discard")
         
-        data = response.json()
-        logger.info(f"Successfully fetched token data for {mint_address}")
-        return data
+        driver = None
+        try:
+            service = Service(ChromeDriverManager().install())
+            driver = webdriver.Chrome(service=service, options=chrome_options)
+            
+            # Set fast page load timeout
+            driver.set_page_load_timeout(10)
+            
+            # Load the Bags page
+            driver.get(f"https://bags.fm/{mint_address}")
+            
+            # OPTIMIZED: Reduced wait times for faster extraction
+            time.sleep(8)  # Reduced from 15s to 8s
+            
+            # Quick scroll to trigger any lazy loading
+            driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+            time.sleep(1)  # Reduced from 3s to 1s
+            driver.execute_script("window.scrollTo(0, 0);")
+            time.sleep(1)  # Reduced from 2s to 1s
+            
+            # Initialize result structure
+            result = {
+                "name": "Unknown Token",
+                "symbol": "UNKNOWN", 
+                "image": None,
+                "website": None,
+                "createdBy": {"twitter": None},
+                "royaltiesTo": {"twitter": None},
+                "royaltyPercentage": None
+            }
+            
+            # Extract token image FIRST (most important)
+            logger.info("🖼️ Looking for token image...")
+            
+            token_image = None
+            best_score = 0
+            
+            try:
+                all_images = driver.find_elements(By.CSS_SELECTOR, "img")
+                logger.info(f"Analyzing {len(all_images)} images for token image...")
+                
+                for img in all_images:
+                    try:
+                        src = img.get_attribute('src')
+                        alt = img.get_attribute('alt') or ''
+                        
+                        if not src or not src.startswith('http'):
+                            continue
+                        
+                        # Get actual rendered size
+                        size = img.size
+                        width = size.get('width', 0)
+                        height = size.get('height', 0)
+                        
+                        # Score this image as a potential token image
+                        score = 0
+                        
+                        # Strong positive indicators for token images
+                        if any(keyword in alt.lower() for keyword in ['logo', 'token', 'coin']) and 'icon' not in alt.lower():
+                            score += 5  # Alt text mentions logo/token/coin
+                        
+                        if 'ipfs' in src or 'arweave' in src:
+                            score += 4  # Decentralized storage = likely token image
+                        
+                        if any(keyword in src.lower() for keyword in ['wsrv.nl', 'cdn']):
+                            score += 2  # CDN images are often token images
+                        
+                        # Size-based scoring (larger = more likely to be token image)
+                        if width >= 80 and height >= 80:
+                            score += 3
+                        elif width >= 50 and height >= 50:
+                            score += 2
+                        elif width >= 30 and height >= 30:
+                            score += 1
+                        
+                        # Square images are more likely to be tokens
+                        if width == height and width >= 30:
+                            score += 1
+                        
+                        # Strong negative indicators
+                        if any(skip in src.lower() for skip in ['favicon', 'icon.png', 'icon.ico', 'x-dark', 'plus.webp', 'copy.webp']):
+                            score -= 5  # Definitely UI icons
+                        
+                        if any(skip in alt.lower() for skip in ['icon', 'copy', 'plus', 'twitter', 'logo']) and 'token' not in alt.lower():
+                            score -= 3  # UI element descriptions
+                        
+                        if width < 30 or height < 30:
+                            score -= 2  # Too small to be main token image
+                        
+                        if width != height and max(width, height) < 60:
+                            score -= 1  # Small non-square images
+                        
+                        logger.debug(f"Image: {src[:60]}... | Alt: {alt} | Size: {width}x{height} | Score: {score}")
+                        
+                        if score > best_score and score >= 3:  # Minimum threshold
+                            best_score = score
+                            token_image = src
+                            logger.info(f"🏆 New best token image candidate (score {score}): {alt} - {src[:100]}...")
+                    
+                    except Exception as e:
+                        logger.debug(f"Error analyzing image: {e}")
+                        continue
+                
+                if token_image:
+                    result["image"] = token_image
+                    logger.info(f"✅ Selected token image (score {best_score}): {token_image}")
+                else:
+                    logger.warning("❌ No suitable token image found")
+                    
+            except Exception as e:
+                logger.error(f"Error in token image extraction: {e}")
+            
+            # Extract token name
+            logger.info("📛 Looking for token name...")
+            name_selectors = ["h1", "h2", ".title", ".token-title", ".text-4xl", ".text-3xl", ".text-2xl", ".text-xl", ".font-bold"]
+            for selector in name_selectors:
+                try:
+                    elements = driver.find_elements(By.CSS_SELECTOR, selector)
+                    for element in elements:
+                        text = element.text.strip()
+                        if text and 3 <= len(text) <= 50:
+                            if len(text.split()) <= 4 and not any(skip in text.lower() for skip in ["trade", "launch", "buy", "sell", "connect"]):
+                                result["name"] = text
+                                logger.info(f"✅ Found token name: '{text}' via {selector}")
+                                break
+                except:
+                    continue
+                if result["name"] != "Unknown Token":
+                    break
+            
+            # Extract Twitter handles
+            twitter_elements = driver.find_elements(By.CSS_SELECTOR, "a[href*='twitter.com'], a[href*='x.com']")
+            twitter_data = []
+            
+            for element in twitter_elements:
+                try:
+                    href = element.get_attribute('href')
+                    if href:
+                        match = re.search(r'(?:twitter\.com|x\.com)/([^/?]+)', href)
+                        if match:
+                            handle = match.group(1)
+                            if handle not in ['intent', 'share', 'home']:
+                                parent_text = element.find_element(By.XPATH, "..").text.strip()
+                                twitter_data.append({
+                                    'handle': handle,
+                                    'context': parent_text[:100]
+                                })
+                                logger.info(f"🔗 Found Twitter: @{handle}")
+                except:
+                    continue
+            
+            # Assign Twitter handles (creator and fee recipient)
+            if twitter_data:
+                # Look for context clues to determine creator vs fee recipient
+                creator_handle = None
+                fee_handle = None
+                
+                for data in twitter_data:
+                    context = data['context'].lower()
+                    if any(keyword in context for keyword in ['creator', 'created', 'by', 'author']):
+                        creator_handle = data['handle']
+                    elif any(keyword in context for keyword in ['fee', 'royalt', 'split', 'recipient']):
+                        fee_handle = data['handle']
+                
+                # If we couldn't identify by context, use order
+                if not creator_handle and twitter_data:
+                    creator_handle = twitter_data[0]['handle']
+                if not fee_handle and len(twitter_data) > 1:
+                    fee_handle = twitter_data[1]['handle']
+                elif not fee_handle:
+                    fee_handle = creator_handle
+                
+                result["createdBy"]["twitter"] = creator_handle
+                result["royaltiesTo"]["twitter"] = fee_handle
+                
+                logger.info(f"🎯 Creator: @{creator_handle}, Fee Recipient: @{fee_handle}")
+            
+            # Extract royalty percentage
+            all_elements = driver.find_elements(By.CSS_SELECTOR, "*")
+            for element in all_elements:
+                try:
+                    text = element.text
+                    if '%' in text:
+                        percent_matches = re.findall(r'(\d+(?:\.\d+)?)%', text)
+                        for match in percent_matches:
+                            pct = float(match)
+                            if 0 < pct <= 50:
+                                result["royaltyPercentage"] = pct
+                                logger.info(f"✅ Found royalty: {pct}%")
+                                break
+                except:
+                    continue
+                if result["royaltyPercentage"]:
+                    break
+            
+            logger.info(f"✅ Successfully extracted Bags data for {mint_address}")
+            return result
+            
+        finally:
+            if driver:
+                driver.quit()
         
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Failed to fetch token data from Bags API for {mint_address}: {e}")
-        return None
-    except json.JSONDecodeError as e:
-        logger.error(f"Failed to parse JSON response from Bags API for {mint_address}: {e}")
+    except Exception as e:
+        logger.error(f"Failed to fetch token data from Bags for {mint_address}: {e}")
         return None
 
 def format_telegram_message(mint_address: str, token_data: Dict) -> str:
-    """Format the Telegram message using Bags API data"""
+    """Format the Telegram message using Bags browser-extracted data"""
     try:
-        # Extract data from Bags API response
+        # Extract data from browser scraping result
         name = token_data.get("name", "Unknown Token")
         symbol = token_data.get("symbol", "UNKNOWN")
         image_url = token_data.get("image", "")
@@ -254,7 +469,7 @@ async def send_telegram_message(mint_address: str, token_data: Dict):
 # ============================================================================
 
 async def process_new_token(mint_address: str):
-    """Process a newly detected token using Bags API"""
+    """Process a newly detected token using Bags browser automation"""
     try:
         if mint_address in seen_mints:
             return
@@ -262,15 +477,15 @@ async def process_new_token(mint_address: str):
         logger.info(f"Processing new token: {mint_address}")
         seen_mints.add(mint_address)
         
-        # Fetch token data from Bags API
+        # Fetch token data from Bags website using browser automation
         token_data = fetch_bags_token_data(mint_address)
         
         if token_data:
-            # Send Telegram message with Bags API data
+            # Send Telegram message with browser-extracted data
             await send_telegram_message(mint_address, token_data)
         else:
-            # Fallback if Bags API fails
-            logger.warning(f"Bags API failed for {mint_address}, sending basic notification")
+            # Fallback if browser automation fails
+            logger.warning(f"Bags browser extraction failed for {mint_address}, sending basic notification")
             fallback_message = f"""🚀 New Coin Launched on Bags!
 
 Mint: {mint_address}
@@ -446,9 +661,9 @@ async def main():
     # Initialize Telegram bot
     telegram_bot = Bot(token=TELEGRAM_TOKEN)
     
-    logger.info("Starting Bags Launchpad Telegram Bot (Upgraded)...")
+    logger.info("Starting Bags Launchpad Telegram Bot (Browser Automation)...")
     logger.info(f"Monitoring for tokens from deployer: {BAGS_UPDATE_AUTHORITY}")
-    logger.info(f"Using Bags API: {BAGS_API_BASE}")
+    logger.info(f"Using Bags browser extraction for complete fee split data")
     
     # Test Telegram connection
     try:
@@ -456,7 +671,7 @@ async def main():
         logger.info(f"Bot connected: @{bot_info.username}")
         
         # Send startup message
-        startup_message = "🤖 BagWatch Bot is online and monitoring Bags launchpad (Upgraded Version)!"
+        startup_message = "🤖 BagWatch Bot is online with FULL FEE SPLIT DETECTION! 💰🔍"
         await telegram_bot.send_message(
             chat_id=CHANNEL_ID,
             text=startup_message
