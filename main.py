@@ -128,7 +128,7 @@ def fetch_bags_token_data(mint_address: str) -> Optional[Dict]:
     try:
         logger.info(f"🚀 Browser scraping Bags page: https://bags.fm/{mint_address}")
         
-        # OPTIMIZED Chrome options for speed
+        # OPTIMIZED Chrome options for speed + Railway/Docker compatibility
         chrome_options = Options()
         chrome_options.add_argument("--headless")
         chrome_options.add_argument("--no-sandbox")
@@ -143,10 +143,30 @@ def fetch_bags_token_data(mint_address: str) -> Optional[Dict]:
         chrome_options.add_argument("--disable-extensions")
         chrome_options.add_argument("--disable-background-timer-throttling")
         chrome_options.add_argument("--aggressive-cache-discard")
+        # Railway/Docker compatibility
+        chrome_options.add_argument("--disable-setuid-sandbox")
+        chrome_options.add_argument("--disable-features=VizDisplayCompositor")
+        chrome_options.add_argument("--remote-debugging-port=9222")
+        
+        # Use system Chrome binary if available (Railway/Docker)
+        chrome_binary = os.getenv("CHROME_BIN")
+        if chrome_binary:
+            chrome_options.binary_location = chrome_binary
+            logger.info(f"Using Chrome binary: {chrome_binary}")
+        
+        # Use system ChromeDriver if available
+        chromedriver_path = os.getenv("CHROMEDRIVER_PATH")
         
         driver = None
         try:
-            service = Service(ChromeDriverManager().install())
+            # Use system ChromeDriver if available, otherwise download
+            if chromedriver_path and os.path.exists(chromedriver_path):
+                service = Service(chromedriver_path)
+                logger.info(f"Using system ChromeDriver: {chromedriver_path}")
+            else:
+                service = Service(ChromeDriverManager().install())
+                logger.info("Using downloaded ChromeDriver")
+            
             driver = webdriver.Chrome(service=service, options=chrome_options)
             
             # Set fast page load timeout
@@ -492,7 +512,7 @@ Mint: {mint_address}
 Solscan: https://solscan.io/token/{mint_address}
 Website: https://bags.fm/{mint_address}
 
-⚠️ Full details temporarily unavailable"""
+💡 Visit Bags page for fee split info and token details"""
             
             await telegram_bot.send_message(
                 chat_id=CHANNEL_ID,

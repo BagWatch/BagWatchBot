@@ -1,0 +1,8 @@
+[build]
+# Install Chrome and dependencies for Selenium
+aptPkgs = ["chromium-browser", "chromium-chromedriver"]
+
+[variables]
+# Set Chrome binary path for Selenium
+CHROME_BIN = "/usr/bin/chromium-browser"
+CHROMEDRIVER_PATH = "/usr/bin/chromedriver"
