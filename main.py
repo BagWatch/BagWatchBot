@@ -378,6 +378,7 @@ def fetch_bags_token_data(mint_address: str) -> Optional[Dict]:
                 # Look for "created by" and "royalties to" patterns specific to Bags
                 creator_handle = None
                 fee_handle = None
+                project_social = None
                 
                 # Find Twitter links and their context
                 twitter_elements = driver.find_elements(By.CSS_SELECTOR, "a[href*='twitter.com'], a[href*='x.com']")
@@ -395,34 +396,46 @@ def fetch_bags_token_data(mint_address: str) -> Optional[Dict]:
                                         # Check parent elements for context
                                         parent = element.find_element(By.XPATH, "..")
                                         grandparent = parent.find_element(By.XPATH, "..")
-                                        context = f"{parent.text} {grandparent.text}".lower()
+                                        great_grandparent = grandparent.find_element(By.XPATH, "..")
+                                        context = f"{parent.text} {grandparent.text} {great_grandparent.text}".lower()
                                         
-                                        logger.info(f"🔗 Twitter handle @{handle} with context: '{context[:100]}...'")
+                                        logger.info(f"🔗 Twitter handle @{handle} with context: '{context[:150]}...'")
                                         
-                                        # Bags-specific patterns
-                                        if any(keyword in context for keyword in ['created by', 'creator', 'created']):
+                                        # Priority 1: Look for explicit "created by" patterns
+                                        if any(keyword in context for keyword in ['created by', 'earns 100%']):
                                             creator_handle = handle
-                                            logger.info(f"🎯 Identified CREATOR: @{handle}")
-                                        elif any(keyword in context for keyword in ['royalties to', 'royalty', 'fees to', 'recipient']):
+                                            logger.info(f"🎯 CREATOR (created by): @{handle}")
+                                        # Priority 2: Look for fee split patterns
+                                        elif any(keyword in context for keyword in ['royalties to', 'fees to', 'earns']) and 'created by' not in context:
                                             fee_handle = handle
-                                            logger.info(f"💰 Identified FEE RECIPIENT: @{handle}")
+                                            logger.info(f"💰 FEE RECIPIENT (royalties to): @{handle}")
+                                        # Priority 3: Just "twitter" or social context
+                                        elif any(keyword in context for keyword in ['twitter', 'social', 'website']) and not creator_handle:
+                                            # This might be project social, not creator
+                                            project_social = handle
+                                            logger.info(f"📱 PROJECT SOCIAL: @{handle}")
+                                        # Fallback: assign by order if no clear context
                                         elif not creator_handle:
-                                            # First one found could be creator
                                             creator_handle = handle
-                                            logger.info(f"🎯 First handle as creator: @{handle}")
+                                            logger.info(f"🎯 Default creator assignment: @{handle}")
                                         elif not fee_handle:
-                                            # Second one could be fee recipient
                                             fee_handle = handle
-                                            logger.info(f"💰 Second handle as fee recipient: @{handle}")
+                                            logger.info(f"💰 Default fee recipient assignment: @{handle}")
                                             
                                     except:
-                                        # Fallback: just collect the handle
+                                        # Simple fallback: just collect the handle
                                         if not creator_handle:
                                             creator_handle = handle
                                         elif not fee_handle:
                                             fee_handle = handle
                     except:
                         continue
+                
+                # Logic: If we only found project social but no explicit creator, 
+                # the project social is probably the creator
+                if not creator_handle and project_social:
+                    creator_handle = project_social
+                    logger.info(f"🎯 Using project social as creator: @{creator_handle}")
                 
                 # Assign the handles
                 result["createdBy"]["twitter"] = creator_handle
@@ -505,18 +518,19 @@ Solscan: https://solscan.io/token/{mint_address}
         
         # Handle Twitter display logic with clickable usernames
         if creator_clean and royalty_clean and creator_clean.lower() != royalty_clean.lower():
-            # Different creator and fee recipient - show both as clickable usernames
+            # Different creator and fee recipient - FEE SPLIT DETECTED
             message += f"\nCreator: [@{creator_clean}](https://x.com/{creator_clean})"
             message += f"\nFee Recipient: [@{royalty_clean}](https://x.com/{royalty_clean})"
-        elif creator_clean and royalty_clean and creator_clean.lower() == royalty_clean.lower():
-            # Same person for both
-            message += f"\nTwitter: [@{creator_clean}](https://x.com/{creator_clean})"
         elif creator_clean:
-            # Only creator
+            # Always show as Creator (not just "Twitter") - this person created the token
             message += f"\nCreator: [@{creator_clean}](https://x.com/{creator_clean})"
+            
+            # If there's additional social info that's different, show it separately
+            # (This would require detecting project social vs creator social)
+            
         elif royalty_clean:
-            # Only fee recipient  
-            message += f"\nFee Recipient: [@{royalty_clean}](https://x.com/{royalty_clean})"
+            # Fallback: only fee recipient found
+            message += f"\nCreator: [@{royalty_clean}](https://x.com/{royalty_clean})"
         
         # Add royalty percentage if available
         if royalty_percentage is not None:
