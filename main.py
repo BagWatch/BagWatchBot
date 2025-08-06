@@ -314,52 +314,94 @@ def fetch_bags_token_data(mint_address: str) -> Optional[Dict]:
                 except:
                     pass
             
-            # Extract Twitter handles
-            twitter_elements = driver.find_elements(By.CSS_SELECTOR, "a[href*='twitter.com'], a[href*='x.com']")
-            twitter_data = []
+            # Extract token symbol from page
+            logger.info("🔤 Looking for token symbol...")
+            try:
+                page_text = driver.find_element(By.TAG_NAME, "body").text
+                
+                # Look for symbol patterns on Bags pages
+                if result["name"] and result["name"].startswith("$"):
+                    # If name is $NYANCAT, symbol should be NYANCAT
+                    symbol_candidate = result["name"][1:]  # Remove $
+                    if len(symbol_candidate) <= 10 and symbol_candidate.isupper():
+                        result["symbol"] = symbol_candidate
+                        logger.info(f"✅ Derived symbol from name: {symbol_candidate}")
+                else:
+                    # Look for symbol patterns in text
+                    symbol_matches = re.findall(r'\b([A-Z]{2,10})\b', page_text)
+                    for match in symbol_matches:
+                        if match not in ['BAGS', 'SOL', 'USD', 'API', 'NFT', 'DAO']:
+                            result["symbol"] = match
+                            logger.info(f"✅ Found symbol: {match}")
+                            break
+            except Exception as e:
+                logger.debug(f"Error extracting symbol: {e}")
             
-            for element in twitter_elements:
-                try:
-                    href = element.get_attribute('href')
-                    if href:
-                        match = re.search(r'(?:twitter\.com|x\.com)/([^/?]+)', href)
-                        if match:
-                            handle = match.group(1)
-                            if handle not in ['intent', 'share', 'home']:
-                                parent_text = element.find_element(By.XPATH, "..").text.strip()
-                                twitter_data.append({
-                                    'handle': handle,
-                                    'context': parent_text[:100]
-                                })
-                                logger.info(f"🔗 Found Twitter: @{handle}")
-                except:
-                    continue
-            
-            # Assign Twitter handles (creator and fee recipient)
-            if twitter_data:
-                # Look for context clues to determine creator vs fee recipient
+            # Enhanced Twitter/Creator extraction for Bags page format
+            logger.info("🐦 Looking for creator and fee recipient...")
+            try:
+                page_text = driver.find_element(By.TAG_NAME, "body").text
+                
+                # Look for "created by" and "royalties to" patterns specific to Bags
                 creator_handle = None
                 fee_handle = None
                 
-                for data in twitter_data:
-                    context = data['context'].lower()
-                    if any(keyword in context for keyword in ['creator', 'created', 'by', 'author']):
-                        creator_handle = data['handle']
-                    elif any(keyword in context for keyword in ['fee', 'royalt', 'split', 'recipient']):
-                        fee_handle = data['handle']
+                # Find Twitter links and their context
+                twitter_elements = driver.find_elements(By.CSS_SELECTOR, "a[href*='twitter.com'], a[href*='x.com']")
                 
-                # If we couldn't identify by context, use order
-                if not creator_handle and twitter_data:
-                    creator_handle = twitter_data[0]['handle']
-                if not fee_handle and len(twitter_data) > 1:
-                    fee_handle = twitter_data[1]['handle']
-                elif not fee_handle:
-                    fee_handle = creator_handle
+                for element in twitter_elements:
+                    try:
+                        href = element.get_attribute('href')
+                        if href:
+                            match = re.search(r'(?:twitter\.com|x\.com)/([^/?]+)', href)
+                            if match:
+                                handle = match.group(1)
+                                if handle not in ['intent', 'share', 'home']:
+                                    # Get surrounding context to determine role
+                                    try:
+                                        # Check parent elements for context
+                                        parent = element.find_element(By.XPATH, "..")
+                                        grandparent = parent.find_element(By.XPATH, "..")
+                                        context = f"{parent.text} {grandparent.text}".lower()
+                                        
+                                        logger.info(f"🔗 Twitter handle @{handle} with context: '{context[:100]}...'")
+                                        
+                                        # Bags-specific patterns
+                                        if any(keyword in context for keyword in ['created by', 'creator', 'created']):
+                                            creator_handle = handle
+                                            logger.info(f"🎯 Identified CREATOR: @{handle}")
+                                        elif any(keyword in context for keyword in ['royalties to', 'royalty', 'fees to', 'recipient']):
+                                            fee_handle = handle
+                                            logger.info(f"💰 Identified FEE RECIPIENT: @{handle}")
+                                        elif not creator_handle:
+                                            # First one found could be creator
+                                            creator_handle = handle
+                                            logger.info(f"🎯 First handle as creator: @{handle}")
+                                        elif not fee_handle:
+                                            # Second one could be fee recipient
+                                            fee_handle = handle
+                                            logger.info(f"💰 Second handle as fee recipient: @{handle}")
+                                            
+                                    except:
+                                        # Fallback: just collect the handle
+                                        if not creator_handle:
+                                            creator_handle = handle
+                                        elif not fee_handle:
+                                            fee_handle = handle
+                    except:
+                        continue
                 
+                # Assign the handles
                 result["createdBy"]["twitter"] = creator_handle
-                result["royaltiesTo"]["twitter"] = fee_handle
+                result["royaltiesTo"]["twitter"] = fee_handle if fee_handle else creator_handle
                 
-                logger.info(f"🎯 Creator: @{creator_handle}, Fee Recipient: @{fee_handle}")
+                if creator_handle or fee_handle:
+                    logger.info(f"✅ Final assignment - Creator: @{creator_handle}, Fee Recipient: @{fee_handle}")
+                else:
+                    logger.warning("❌ No Twitter handles found")
+                    
+            except Exception as e:
+                logger.error(f"Error in enhanced Twitter extraction: {e}")
             
             # Extract royalty percentage
             all_elements = driver.find_elements(By.CSS_SELECTOR, "*")
@@ -428,20 +470,20 @@ Mint: {mint_address}
 Solscan: https://solscan.io/token/{mint_address}
 """
         
-        # Handle Twitter display logic with proper links
+        # Handle Twitter display logic with clickable usernames
         if creator_clean and royalty_clean and creator_clean.lower() != royalty_clean.lower():
-            # Different creator and fee recipient - show both with Twitter links
-            message += f"\nCreator: https://x.com/{creator_clean}"
-            message += f"\nFee Recipient: https://x.com/{royalty_clean}"
+            # Different creator and fee recipient - show both as clickable usernames
+            message += f"\nCreator: [@{creator_clean}](https://x.com/{creator_clean})"
+            message += f"\nFee Recipient: [@{royalty_clean}](https://x.com/{royalty_clean})"
         elif creator_clean and royalty_clean and creator_clean.lower() == royalty_clean.lower():
             # Same person for both
-            message += f"\nTwitter: https://x.com/{creator_clean}"
+            message += f"\nTwitter: [@{creator_clean}](https://x.com/{creator_clean})"
         elif creator_clean:
             # Only creator
-            message += f"\nCreator: https://x.com/{creator_clean}"
+            message += f"\nCreator: [@{creator_clean}](https://x.com/{creator_clean})"
         elif royalty_clean:
             # Only fee recipient  
-            message += f"\nFee Recipient: https://x.com/{royalty_clean}"
+            message += f"\nFee Recipient: [@{royalty_clean}](https://x.com/{royalty_clean})"
         
         # Add royalty percentage if available
         if royalty_percentage is not None:
@@ -475,7 +517,8 @@ async def send_telegram_message(mint_address: str, token_data: Dict):
                 await telegram_bot.send_photo(
                     chat_id=CHANNEL_ID,
                     photo=image_url,
-                    caption=message
+                    caption=message,
+                    parse_mode="Markdown"
                 )
                 logger.info(f"Sent token update with image for {mint_address}")
                 return
@@ -486,6 +529,7 @@ async def send_telegram_message(mint_address: str, token_data: Dict):
         await telegram_bot.send_message(
             chat_id=CHANNEL_ID,
             text=message,
+            parse_mode="Markdown",
             disable_web_page_preview=False
         )
         logger.info(f"Sent token update for {mint_address}")
