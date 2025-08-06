@@ -451,6 +451,7 @@ def fetch_bags_token_data(mint_address: str) -> Optional[Dict]:
             
             # BULLETPROOF fee split extraction - this CANNOT fail
             logger.info("🎯 BULLETPROOF FEE SPLIT EXTRACTION...")
+            logger.info(f"📄 Full page text for debugging:\n{page_text}")
             try:
                 # Method 1: Target specific HTML elements that contain the user info
                 creator_handle = None
@@ -460,19 +461,31 @@ def fetch_bags_token_data(mint_address: str) -> Optional[Dict]:
                 try:
                     # Find all text elements that might contain "created by"
                     all_elements = driver.find_elements(By.XPATH, "//*[contains(text(), 'created by')]")
-                    for element in all_elements:
+                    logger.info(f"🔍 Found {len(all_elements)} elements containing 'created by'")
+                    
+                    for i, element in enumerate(all_elements):
                         try:
+                            element_text = element.text
+                            logger.info(f"🔍 Element {i} text: '{element_text}'")
+                            
                             # Get parent container that should have the Twitter link
                             parent = element.find_element(By.XPATH, "..")
-                            twitter_link = parent.find_element(By.CSS_SELECTOR, "a[href*='x.com'], a[href*='twitter.com']")
-                            href = twitter_link.get_attribute('href')
+                            twitter_links = parent.find_elements(By.CSS_SELECTOR, "a[href*='x.com'], a[href*='twitter.com']")
+                            logger.info(f"🔍 Found {len(twitter_links)} Twitter links in parent")
                             
-                            handle_match = re.search(r'(?:twitter\.com|x\.com)/([^/?]+)', href)
-                            if handle_match:
-                                creator_handle = handle_match.group(1)
-                                logger.info(f"🎯 CREATOR found via 'created by' element: @{creator_handle}")
+                            for link in twitter_links:
+                                href = link.get_attribute('href')
+                                logger.info(f"🔗 Twitter link: {href}")
+                                
+                                handle_match = re.search(r'(?:twitter\.com|x\.com)/([^/?]+)', href)
+                                if handle_match:
+                                    creator_handle = handle_match.group(1)
+                                    logger.info(f"🎯 CREATOR found via 'created by' element: @{creator_handle}")
+                                    break
+                            if creator_handle:
                                 break
-                        except:
+                        except Exception as sub_e:
+                            logger.debug(f"Error processing created by element {i}: {sub_e}")
                             continue
                 except Exception as e:
                     logger.debug(f"Created by element search failed: {e}")
@@ -480,19 +493,31 @@ def fetch_bags_token_data(mint_address: str) -> Optional[Dict]:
                 # Look for elements that contain "royalties to" text
                 try:
                     all_elements = driver.find_elements(By.XPATH, "//*[contains(text(), 'royalties to')]")
-                    for element in all_elements:
+                    logger.info(f"🔍 Found {len(all_elements)} elements containing 'royalties to'")
+                    
+                    for i, element in enumerate(all_elements):
                         try:
+                            element_text = element.text
+                            logger.info(f"🔍 Element {i} text: '{element_text}'")
+                            
                             # Get parent container that should have the Twitter link
                             parent = element.find_element(By.XPATH, "..")
-                            twitter_link = parent.find_element(By.CSS_SELECTOR, "a[href*='x.com'], a[href*='twitter.com']")
-                            href = twitter_link.get_attribute('href')
+                            twitter_links = parent.find_elements(By.CSS_SELECTOR, "a[href*='x.com'], a[href*='twitter.com']")
+                            logger.info(f"🔍 Found {len(twitter_links)} Twitter links in parent")
                             
-                            handle_match = re.search(r'(?:twitter\.com|x\.com)/([^/?]+)', href)
-                            if handle_match:
-                                fee_handle = handle_match.group(1)
-                                logger.info(f"💰 FEE RECIPIENT found via 'royalties to' element: @{fee_handle}")
+                            for link in twitter_links:
+                                href = link.get_attribute('href')
+                                logger.info(f"🔗 Twitter link: {href}")
+                                
+                                handle_match = re.search(r'(?:twitter\.com|x\.com)/([^/?]+)', href)
+                                if handle_match:
+                                    fee_handle = handle_match.group(1)
+                                    logger.info(f"💰 FEE RECIPIENT found via 'royalties to' element: @{fee_handle}")
+                                    break
+                            if fee_handle:
                                 break
-                        except:
+                        except Exception as sub_e:
+                            logger.debug(f"Error processing royalties to element {i}: {sub_e}")
                             continue
                 except Exception as e:
                     logger.debug(f"Royalties to element search failed: {e}")
@@ -500,20 +525,27 @@ def fetch_bags_token_data(mint_address: str) -> Optional[Dict]:
                 # Method 2: If HTML targeting failed, use improved text pattern matching
                 if not creator_handle or not fee_handle:
                     logger.info("🔍 Fallback to improved text patterns...")
+                    logger.info(f"🔍 Missing: creator={not creator_handle}, fee_recipient={not fee_handle}")
                     
                     # Look for exact pattern: "created by" followed by username and "X"
                     creator_pattern = r'created by[^@]*?([A-Z0-9_]{3,20})\s*X'
+                    logger.info(f"🔍 Searching for creator pattern: {creator_pattern}")
                     creator_match = re.search(creator_pattern, page_text, re.IGNORECASE)
                     if creator_match and not creator_handle:
                         creator_handle = creator_match.group(1).strip()
                         logger.info(f"🎯 CREATOR found via text pattern: @{creator_handle}")
+                    else:
+                        logger.info(f"🔍 Creator pattern {'found' if creator_match else 'NOT found'}, already have creator: {bool(creator_handle)}")
                     
                     # Look for exact pattern: "royalties to" followed by username and "X"  
                     royalty_pattern = r'royalties to[^@]*?([A-Z0-9_]{3,20})\s*X'
+                    logger.info(f"🔍 Searching for royalty pattern: {royalty_pattern}")
                     royalty_match = re.search(royalty_pattern, page_text, re.IGNORECASE)
                     if royalty_match and not fee_handle:
                         fee_handle = royalty_match.group(1).strip()
                         logger.info(f"💰 FEE RECIPIENT found via text pattern: @{fee_handle}")
+                    else:
+                        logger.info(f"🔍 Royalty pattern {'found' if royalty_match else 'NOT found'}, already have fee_handle: {bool(fee_handle)}")
                 
                 # Method 3: Last resort - try to parse the structured data
                 if not creator_handle or not fee_handle:
