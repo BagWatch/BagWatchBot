@@ -339,34 +339,55 @@ def parse_log_message(log_data: Dict) -> Optional[str]:
     """Parse log message to extract mint address if it's a Bags token"""
     try:
         logs = log_data.get("logs", [])
-        account_keys = log_data.get("value", {}).get("transaction", {}).get("message", {}).get("accountKeys", [])
         
-        # Check if this transaction involves the Bags update authority
-        bags_involved = False
-        for key in account_keys:
-            if key == BAGS_UPDATE_AUTHORITY:
-                bags_involved = True
-                break
-        
-        if not bags_involved:
-            return None
-        
-        # Look for metadata creation in logs
+        # First check if any logs mention metadata creation
+        metadata_creation = False
         for log in logs:
             if any(keyword in log for keyword in [
                 "CreateMetadataAccountV3", 
                 "CreateMetadataAccount",
                 "Program metaq invoke",
-                "CreateMasterEditionV3"
+                "CreateMasterEditionV3",
+                "Instruction: CreateMetadataAccount"
             ]):
-                logger.info(f"Potential Bags token creation detected in logs: {log}")
-                
-                # Try to extract mint address from account keys
-                # Usually the mint is one of the first accounts after the program
-                for account in account_keys[:10]:  # Check first 10 accounts
-                    if account != METADATA_PROGRAM_ID and account != BAGS_UPDATE_AUTHORITY and len(account) > 40:
-                        logger.info(f"Found potential mint address: {account}")
-                        return account
+                metadata_creation = True
+                logger.info(f"Metadata creation detected: {log}")
+                break
+        
+        if not metadata_creation:
+            return None
+            
+        # Get transaction details
+        value = log_data.get("value", {})
+        if not value:
+            return None
+            
+        transaction = value.get("transaction", {})
+        message = transaction.get("message", {})
+        account_keys = message.get("accountKeys", [])
+        
+        # Check if this transaction involves the Bags update authority
+        bags_involved = False
+        mint_candidate = None
+        
+        logger.info(f"Checking {len(account_keys)} account keys for Bags authority")
+        for i, key in enumerate(account_keys):
+            logger.debug(f"Account {i}: {key}")
+            if key == BAGS_UPDATE_AUTHORITY:
+                bags_involved = True
+                logger.info(f"🎯 BAGS AUTHORITY FOUND at position {i}!")
+            elif key != METADATA_PROGRAM_ID and len(key) >= 44 and not mint_candidate:
+                # Potential mint address (Solana addresses are typically 44 chars)
+                mint_candidate = key
+                logger.info(f"Potential mint candidate: {key}")
+        
+        if bags_involved and mint_candidate:
+            logger.info(f"🚀 CONFIRMED BAGS TOKEN: {mint_candidate}")
+            return mint_candidate
+        elif bags_involved:
+            logger.info("Bags authority found but no mint candidate identified")
+        else:
+            logger.debug("No Bags authority found in transaction")
         
         return None
         
@@ -410,15 +431,27 @@ def on_websocket_message(ws, message):
         elif "method" in data and data["method"] == "programNotification":
             params = data.get("params", {})
             result = params.get("result", {})
-            logger.info(f"📋 Program account notification received")
-            logger.info(f"Account pubkey: {result.get('pubkey', 'unknown')}")
+            context = result.get("context", {})
+            value = result.get("value", {})
             
-            # This could be a new metadata account created by Bags
-            account_pubkey = result.get("pubkey")
-            if account_pubkey:
-                logger.info(f"🎯 POTENTIAL BAGS METADATA ACCOUNT: {account_pubkey}")
-                # You might want to derive the mint from the metadata account
-                # For now, let's log it for debugging
+            # Get the account pubkey from params
+            account_pubkey = params.get("result", {}).get("context", {}).get("slot")
+            if not account_pubkey:
+                # Try alternative location
+                account_pubkey = str(params.get("subscription", "unknown"))
+            
+            logger.info(f"📋 Program account notification received")
+            logger.info(f"Subscription ID: {params.get('subscription', 'unknown')}")
+            logger.info(f"Slot: {context.get('slot', 'unknown')}")
+            
+            # This is a metadata account change - try to get the actual account address
+            if value and value.get("owner") == METADATA_PROGRAM_ID:
+                logger.info(f"🎯 METAPLEX METADATA ACCOUNT DETECTED!")
+                logger.info(f"Account owner: {value.get('owner', 'unknown')}")
+                logger.info(f"Account data length: {len(value.get('data', []))}")
+                
+                # TODO: Parse the metadata account to extract mint address
+                # For now, this confirms we're getting Bags-related metadata updates
             
         
     except Exception as e:
