@@ -413,11 +413,28 @@ async def process_new_token(mint_address: str):
                             if json_response.status_code == 200:
                                 json_data = json_response.json()
                                 image_uri = json_data.get("image", "")
-                                twitter = json_data.get("twitter", "")  # Fee recipient/royalty recipient
-                                creator_twitter = json_data.get("creator_twitter", "")  # Token creator
+                                
+                                # Look for Twitter info in multiple possible fields
+                                twitter = (
+                                    json_data.get("twitter", "") or 
+                                    json_data.get("Twitter", "") or
+                                    json_data.get("x", "") or
+                                    json_data.get("X", "")
+                                )  # Fee recipient/royalty recipient
+                                
+                                creator_twitter = (
+                                    json_data.get("creator_twitter", "") or
+                                    json_data.get("creatorTwitter", "") or
+                                    json_data.get("creator_x", "") or
+                                    json_data.get("creatorX", "") or
+                                    json_data.get("author_twitter", "") or
+                                    json_data.get("authorTwitter", "")
+                                )  # Token creator
+                                
                                 website = json_data.get("website", "")
                                 
                                 # Debug the Twitter fields
+                                logger.info(f"JSON metadata keys: {list(json_data.keys())}")
                                 logger.info(f"Twitter data - twitter (fee recipient): '{twitter}', creator_twitter: '{creator_twitter}'")
                                 
                                 # Check multiple possible royalty fields
@@ -473,20 +490,39 @@ Contract: {mint_address}
 • [Photon](https://photon-sol.tinyastro.io/en/r/@BagWatch/{mint_address})"""
 
                     # Handle Twitter links intelligently with clean clickable names
+                    # Always show what we have for transparency
+                    twitter_section_added = False
+                    
                     if creator_twitter and twitter and creator_twitter != twitter:
-                        # Both creator and fee recipient have different Twitter accounts
-                        creator_clean = creator_twitter.replace("@", "").replace("https://x.com/", "").replace("https://twitter.com/", "")
-                        fee_clean = twitter.replace("@", "").replace("https://x.com/", "").replace("https://twitter.com/", "")
-                        enhanced_message += f"\nCreator: [@{creator_clean}](https://x.com/{creator_clean})"
-                        enhanced_message += f"\nRoyalties: [@{fee_clean}](https://x.com/{fee_clean})"
+                        # Both creator and fee recipient have different Twitter accounts - ROYALTY SPLIT
+                        creator_clean = creator_twitter.replace("@", "").replace("https://x.com/", "").replace("https://twitter.com/", "").strip()
+                        fee_clean = twitter.replace("@", "").replace("https://x.com/", "").replace("https://twitter.com/", "").strip()
+                        enhanced_message += f"\n👤 Creator: [@{creator_clean}](https://x.com/{creator_clean})"
+                        enhanced_message += f"\n💰 Royalty Split: [@{fee_clean}](https://x.com/{fee_clean})"
+                        twitter_section_added = True
+                        logger.info(f"Displaying both creator (@{creator_clean}) and royalty recipient (@{fee_clean})")
+                    elif creator_twitter and twitter and creator_twitter.replace("@", "").replace("https://x.com/", "").replace("https://twitter.com/", "").strip() == twitter.replace("@", "").replace("https://x.com/", "").replace("https://twitter.com/", "").strip():
+                        # Same person for both creator and royalties
+                        twitter_clean = twitter.replace("@", "").replace("https://x.com/", "").replace("https://twitter.com/", "").strip()
+                        enhanced_message += f"\n👤 Creator/Royalties: [@{twitter_clean}](https://x.com/{twitter_clean})"
+                        twitter_section_added = True
+                        logger.info(f"Same person for creator and royalties: @{twitter_clean}")
                     elif twitter:
-                        # Only fee recipient/main Twitter
-                        twitter_clean = twitter.replace("@", "").replace("https://x.com/", "").replace("https://twitter.com/", "")
-                        enhanced_message += f"\nTwitter: [@{twitter_clean}](https://x.com/{twitter_clean})"
+                        # Only fee recipient/main Twitter available
+                        twitter_clean = twitter.replace("@", "").replace("https://x.com/", "").replace("https://twitter.com/", "").strip()
+                        enhanced_message += f"\n👤 Twitter: [@{twitter_clean}](https://x.com/{twitter_clean})"
+                        twitter_section_added = True
+                        logger.info(f"Only main Twitter available: @{twitter_clean}")
                     elif creator_twitter:
-                        # Only creator Twitter
-                        creator_clean = creator_twitter.replace("@", "").replace("https://x.com/", "").replace("https://twitter.com/", "")
-                        enhanced_message += f"\nCreator: [@{creator_clean}](https://x.com/{creator_clean})"
+                        # Only creator Twitter available
+                        creator_clean = creator_twitter.replace("@", "").replace("https://x.com/", "").replace("https://twitter.com/", "").strip()
+                        enhanced_message += f"\n👤 Creator: [@{creator_clean}](https://x.com/{creator_clean})"
+                        twitter_section_added = True
+                        logger.info(f"Only creator Twitter available: @{creator_clean}")
+                    
+                    if not twitter_section_added:
+                        logger.warning(f"No Twitter information found for token {mint_address}")
+                        logger.info(f"Raw twitter field: '{twitter}', raw creator_twitter field: '{creator_twitter}'")
                     
                     enhanced_message += f"\nRoyalty: {royalty_percent}%"
                     
