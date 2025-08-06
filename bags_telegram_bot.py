@@ -366,9 +366,25 @@ async def process_new_token(mint_address: str):
         logger.info(f"Processing new token: {mint_address}")
         seen_mints.add(mint_address)
         
-        # Try to get full metadata and format properly
+        # BULLETPROOF: Always post a basic message first, then try to enhance it
+        basic_message = f"""🚀 NEW BAGS TOKEN DETECTED!
+
+Contract: {mint_address}
+Solscan: https://solscan.io/token/{mint_address}"""
+
+        # Send basic message immediately
         try:
-            # First try to get metadata URI using Helius API
+            await telegram_bot.send_message(
+                chat_id=CHANNEL_ID,
+                text=basic_message
+            )
+            logger.info(f"✅ Posted basic notification for: {mint_address}")
+        except Exception as basic_error:
+            logger.error(f"❌ Failed to post basic notification: {basic_error}")
+            return  # If we can't even send a basic message, something is very wrong
+
+        # Now try to get enhanced metadata and send an update
+        try:
             metadata_payload = {
                 "jsonrpc": "2.0",
                 "id": 1,
@@ -376,12 +392,11 @@ async def process_new_token(mint_address: str):
                 "params": {"id": mint_address}
             }
             
-            metadata_response = requests.post(RPC_URL, json=metadata_payload, timeout=10)
+            metadata_response = requests.post(RPC_URL, json=metadata_payload, timeout=5)
             if metadata_response.status_code == 200:
                 asset_data = metadata_response.json().get("result", {})
                 
                 if asset_data:
-                    # Extract token info from Helius response
                     content = asset_data.get("content", {})
                     metadata = content.get("metadata", {})
                     
@@ -392,71 +407,63 @@ async def process_new_token(mint_address: str):
                     json_uri = content.get("json_uri", "")
                     image_uri = ""
                     twitter = ""
-                    creator_twitter = ""
                     website = ""
                     royalty_percent = 0
                     
                     if json_uri:
                         try:
-                            json_response = requests.get(json_uri, timeout=10)
+                            json_response = requests.get(json_uri, timeout=5)
                             if json_response.status_code == 200:
                                 json_data = json_response.json()
                                 image_uri = json_data.get("image", "")
-                                twitter = json_data.get("twitter", "")
-                                creator_twitter = json_data.get("creator_twitter", "")
+                                twitter = json_data.get("twitter", "") or json_data.get("creator_twitter", "")
                                 website = json_data.get("website", "")
                                 royalty_bps = json_data.get("sellerFeeBasisPoints", 0)
                                 royalty_percent = royalty_bps / 100 if royalty_bps else 0
                         except:
-                            pass
+                            pass  # Don't let metadata fetching break the flow
                     
-                    # Format the beautiful message
-                    message = f"""🚀 *New Coin Launched on Bags\\!*
+                    # Create enhanced message with all details (plain text for reliability)
+                    enhanced_message = f"""🚀 NEW BAGS TOKEN DETAILS!
 
-*Name:* {escape_markdown(name)}
-*Ticker:* {escape_markdown(symbol)}
-*Contract:* `{escape_markdown(mint_address)}`
-[View on Solscan](https://solscan.io/token/{mint_address})"""
+Name: {name}
+Ticker: {symbol}
+Contract: {mint_address}
+Solscan: https://solscan.io/token/{mint_address}"""
 
-                    # Add Twitter links
-                    if creator_twitter and creator_twitter != twitter:
-                        creator_link = f"[@{creator_twitter}](https://x.com/{creator_twitter})"
-                        fee_link = f"[@{twitter}](https://x.com/{twitter})" if twitter else "N/A"
-                        message += f"\n\n*Creator:* {creator_link}\n*Fee Recipient:* {fee_link}"
-                    elif twitter:
-                        twitter_link = f"[@{twitter}](https://x.com/{twitter})"
-                        message += f"\n\n*Twitter:* {twitter_link}"
+                    if twitter:
+                        twitter_clean = twitter.replace("@", "").replace("https://x.com/", "").replace("https://twitter.com/", "")
+                        enhanced_message += f"\nTwitter: @{twitter_clean}"
                     
-                    # Add royalty
-                    message += f"\n*Royalty:* {royalty_percent}%"
+                    enhanced_message += f"\nRoyalty: {royalty_percent}%"
                     
-                    # Add website
                     if website:
-                        message += f"\n\n[Website]({website})"
+                        enhanced_message += f"\nWebsite: {website}"
                     
-                    # Send with image if available
+                    # Try to send enhanced message with image
                     if image_uri:
                         try:
                             await telegram_bot.send_photo(
                                 chat_id=CHANNEL_ID,
                                 photo=image_uri,
-                                caption=message,
-                                parse_mode=ParseMode.MARKDOWN_V2
+                                caption=enhanced_message
                             )
-                            logger.info(f"✅ Posted full token info with image: {mint_address}")
+                            logger.info(f"✅ Posted enhanced info with image: {mint_address}")
                             return
                         except Exception as img_error:
-                            logger.warning(f"Failed to send with image: {img_error}")
+                            logger.warning(f"Failed to send image: {img_error}")
                     
-                    # Send as text message
-                    await telegram_bot.send_message(
-                        chat_id=CHANNEL_ID,
-                        text=message,
-                        parse_mode=ParseMode.MARKDOWN_V2,
-                        disable_web_page_preview=False
-                    )
-                    logger.info(f"✅ Posted full token info: {mint_address}")
-                    return
+                    # Send enhanced text message (no image)
+                    try:
+                        await telegram_bot.send_message(
+                            chat_id=CHANNEL_ID,
+                            text=enhanced_message
+                        )
+                        logger.info(f"✅ Posted enhanced info: {mint_address}")
+                        return
+                    except Exception as enhanced_error:
+                        logger.warning(f"Failed to send enhanced message: {enhanced_error}")
+                        # Already sent basic message, so we're good
             
             # Fallback to simple message if metadata fails
             simple_message = f"""🚀 NEW BAGS TOKEN DETECTED\\!
@@ -489,6 +496,16 @@ View on Solscan: https://solscan.io/token/{mint_address}"""
             
         except Exception as e:
             logger.error(f"❌ Failed to post token notification: {e}")
+            # EMERGENCY FALLBACK - Always post something!
+            try:
+                emergency_message = f"🚀 NEW BAGS TOKEN: {mint_address}\nhttps://solscan.io/token/{mint_address}"
+                await telegram_bot.send_message(
+                    chat_id=CHANNEL_ID,
+                    text=emergency_message
+                )
+                logger.info(f"✅ Posted emergency fallback for: {mint_address}")
+            except Exception as emergency_error:
+                logger.error(f"❌ Even emergency fallback failed: {emergency_error}")
         
     except Exception as e:
         logger.error(f"Error processing token {mint_address}: {e}")
