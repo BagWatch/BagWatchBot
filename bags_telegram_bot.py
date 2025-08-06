@@ -386,12 +386,48 @@ async def process_new_token(mint_address: str):
                     name = metadata.get("name", "Unknown Token")
                     symbol = metadata.get("symbol", "UNKNOWN")
                     
-                    # Check for royalty info in Helius response
+                    # Check for royalty/creator fee info in Helius response with better extraction
                     royalty_info = asset_data.get("royalty", {})
-                    creator_royalty = royalty_info.get("percent", 0) if royalty_info else 0
+                    creator_royalty = 0
                     
-                    logger.info(f"Helius royalty data: {royalty_info}")
+                    # First check the royalty object
+                    if royalty_info:
+                        # Try different possible fields in royalty info
+                        creator_royalty = (
+                            royalty_info.get("percent", 0) or
+                            royalty_info.get("percentage", 0) or
+                            royalty_info.get("basis_points", 0) / 100 if royalty_info.get("basis_points") else 0
+                        )
+                        logger.info(f"Helius royalty data: {royalty_info}")
+                        logger.info(f"Extracted creator_royalty from royalty object: {creator_royalty}%")
+                    else:
+                        logger.info("No royalty object found in Helius response")
+                    
+                    # Also check for other fee-related fields in the main asset data
+                    if creator_royalty == 0:
+                        fee_fields_to_check = [
+                            "seller_fee_basis_points", "sellerFeeBasisPoints",
+                            "creator_fee", "creatorFee", "creator_fees",
+                            "fee", "fees"
+                        ]
+                        for field in fee_fields_to_check:
+                            value = asset_data.get(field)
+                            if value is not None and value > 0:
+                                if field.endswith("basis_points") or field.endswith("BasisPoints"):
+                                    creator_royalty = value / 100  # Convert basis points to percentage
+                                else:
+                                    creator_royalty = value
+                                logger.info(f"Found creator fee in asset_data.{field}: {value} -> {creator_royalty}%")
+                                break
+                    
                     logger.info(f"Helius asset_data keys: {list(asset_data.keys())}")
+                    
+                    # Log any fields that might contain fee/royalty info for debugging
+                    fee_related_keys = [key for key in asset_data.keys() if any(term in key.lower() for term in ['fee', 'royalt', 'creator', 'seller'])]
+                    if fee_related_keys:
+                        logger.info(f"Fee-related fields in Helius response: {fee_related_keys}")
+                        for key in fee_related_keys:
+                            logger.info(f"  {key}: {asset_data[key]}")
                     
                     # Also check creators array for royalty info
                     creators = asset_data.get("creators", [])
@@ -399,6 +435,11 @@ async def process_new_token(mint_address: str):
                         logger.info(f"Creators data: {creators}")
                         total_creator_share = sum(creator.get("share", 0) for creator in creators)
                         logger.info(f"Total creator share: {total_creator_share}%")
+                        
+                        # Sometimes royalty info is in the creators array
+                        if total_creator_share > 0 and creator_royalty == 0:
+                            creator_royalty = total_creator_share
+                            logger.info(f"Using creators array total share as royalty: {creator_royalty}%")
                     
                     # Get additional metadata from JSON URI if available
                     json_uri = content.get("json_uri", "")
@@ -437,45 +478,86 @@ async def process_new_token(mint_address: str):
                                 logger.info(f"JSON metadata keys: {list(json_data.keys())}")
                                 logger.info(f"Twitter data - twitter (fee recipient): '{twitter}', creator_twitter: '{creator_twitter}'")
                                 
-                                # Check multiple possible royalty fields
-                                royalty_bps = (
-                                    json_data.get("sellerFeeBasisPoints", 0) or
-                                    json_data.get("seller_fee_basis_points", 0) or
-                                    json_data.get("royalty", 0) or
-                                    json_data.get("royaltyBps", 0)
-                                )
+                                # Check multiple possible royalty/creator fee fields with better logging
+                                royalty_fields_to_check = [
+                                    # Standard Metaplex fields
+                                    "sellerFeeBasisPoints", "seller_fee_basis_points",
+                                    # Creator fee variations
+                                    "creator_fee", "creatorFee", "creator_fees", "creatorFees",
+                                    "creatorFeeBasisPoints", "creator_fee_basis_points",
+                                    # Royalty variations
+                                    "royalty", "royalties", "royaltyBps", "royalty_bps",
+                                    # Generic fee fields
+                                    "fee", "fees", "feeBasisPoints", "fee_basis_points",
+                                    # Other possible names
+                                    "seller_fee", "sellerFee", "secondary_sale_fee", "secondarySaleFee"
+                                ]
                                 
-                                # Convert to percentage
-                                if royalty_bps > 100:  # Likely in basis points
-                                    royalty_percent = royalty_bps / 100
-                                else:  # Already in percentage or small basis points
-                                    royalty_percent = royalty_bps
-                                
-                                # Debug logging
-                                logger.info(f"Royalty data - raw: {royalty_bps}, percentage: {royalty_percent}%")
                                 logger.info(f"Available JSON fields: {list(json_data.keys())}")
                                 
-                                # Check if there are any royalty-related fields we might be missing
-                                royalty_fields = [key for key in json_data.keys() if 'royalt' in key.lower() or 'fee' in key.lower()]
-                                if royalty_fields:
-                                    logger.info(f"Found royalty-related fields: {royalty_fields}")
-                                    for field in royalty_fields:
-                                        logger.info(f"  {field}: {json_data[field]}")
+                                # Check each royalty field
+                                royalty_bps = 0
+                                found_field = None
+                                for field in royalty_fields_to_check:
+                                    value = json_data.get(field)
+                                    if value is not None and value != 0:
+                                        logger.info(f"Found royalty in field '{field}': {value}")
+                                        royalty_bps = value
+                                        found_field = field
+                                        break
+                                    elif value is not None:
+                                        logger.info(f"Field '{field}' exists but is 0: {value}")
+                                
+                                if not found_field:
+                                    logger.warning("No royalty fields found with non-zero values")
+                                    # Log all fields that might contain royalty info
+                                    royalty_related = [key for key in json_data.keys() if any(term in key.lower() for term in ['royalt', 'fee', 'seller', 'creator'])]
+                                    if royalty_related:
+                                        logger.info(f"Found potential royalty-related fields: {royalty_related}")
+                                        for field in royalty_related:
+                                            logger.info(f"  {field}: {json_data[field]}")
+                                
+                                # Convert to percentage - most likely basis points (1% = 100 basis points)
+                                if royalty_bps > 0:
+                                    if royalty_bps >= 100:  # Likely in basis points (500 = 5%)
+                                        royalty_percent = royalty_bps / 100
+                                        logger.info(f"Converted {royalty_bps} basis points to {royalty_percent}% (divided by 100)")
+                                    else:  # Already in percentage or small value
+                                        royalty_percent = royalty_bps
+                                        logger.info(f"Using {royalty_bps} as direct percentage")
+                                else:
+                                    royalty_percent = 0
+                                    logger.warning("No royalty data found in JSON metadata")
                         except:
                             pass  # Don't let metadata fetching break the flow
                     
-                    # Use the best available royalty data
+                    # Use the best available royalty data with detailed logging
                     final_royalty = 0
+                    royalty_source = "none"
+                    
+                    logger.info(f"Royalty comparison - Helius: {creator_royalty}%, JSON: {royalty_percent}%")
+                    
                     if creator_royalty > 0:
                         final_royalty = creator_royalty
-                        logger.info(f"Using Helius royalty: {final_royalty}%")
+                        royalty_source = "Helius API"
+                        logger.info(f"✅ Using Helius royalty: {final_royalty}%")
                     elif royalty_percent > 0:
                         final_royalty = royalty_percent
-                        logger.info(f"Using JSON royalty: {final_royalty}%")
+                        royalty_source = "JSON metadata"
+                        logger.info(f"✅ Using JSON royalty: {final_royalty}%")
                     else:
-                        logger.info("No royalty data found")
+                        logger.warning("❌ No royalty data found in either Helius or JSON metadata")
+                        # Try one more fallback - look at the raw JSON data structure
+                        if 'json_data' in locals():
+                            logger.info("Attempting fallback royalty extraction from raw JSON...")
+                            # Check for any field that might contain numeric royalty data
+                            for key, value in json_data.items():
+                                if isinstance(value, (int, float)) and value > 0 and value <= 10000:
+                                    if any(term in key.lower() for term in ['fee', 'royalt', 'percent', 'bps']):
+                                        logger.info(f"Potential royalty field found: {key} = {value}")
                     
                     royalty_percent = final_royalty
+                    logger.info(f"🎯 Final royalty decision: {royalty_percent}% (source: {royalty_source})")
                     
                     # Create enhanced message with all details (plain text for reliability)
                     enhanced_message = f"""🚀 NEW BAGS TOKEN DETAILS!
@@ -490,39 +572,52 @@ Contract: {mint_address}
 • [Photon](https://photon-sol.tinyastro.io/en/r/@BagWatch/{mint_address})"""
 
                     # Handle Twitter links intelligently with clean clickable names
-                    # Always show what we have for transparency
+                    # Always show what we have for transparency about creator vs fee recipient
                     twitter_section_added = False
                     
-                    if creator_twitter and twitter and creator_twitter != twitter:
-                        # Both creator and fee recipient have different Twitter accounts - ROYALTY SPLIT
-                        creator_clean = creator_twitter.replace("@", "").replace("https://x.com/", "").replace("https://twitter.com/", "").strip()
-                        fee_clean = twitter.replace("@", "").replace("https://x.com/", "").replace("https://twitter.com/", "").strip()
-                        enhanced_message += f"\n👤 Creator: [@{creator_clean}](https://x.com/{creator_clean})"
-                        enhanced_message += f"\n💰 Royalty Split: [@{fee_clean}](https://x.com/{fee_clean})"
-                        twitter_section_added = True
-                        logger.info(f"Displaying both creator (@{creator_clean}) and royalty recipient (@{fee_clean})")
-                    elif creator_twitter and twitter and creator_twitter.replace("@", "").replace("https://x.com/", "").replace("https://twitter.com/", "").strip() == twitter.replace("@", "").replace("https://x.com/", "").replace("https://twitter.com/", "").strip():
-                        # Same person for both creator and royalties
-                        twitter_clean = twitter.replace("@", "").replace("https://x.com/", "").replace("https://twitter.com/", "").strip()
-                        enhanced_message += f"\n👤 Creator/Royalties: [@{twitter_clean}](https://x.com/{twitter_clean})"
-                        twitter_section_added = True
-                        logger.info(f"Same person for creator and royalties: @{twitter_clean}")
-                    elif twitter:
-                        # Only fee recipient/main Twitter available
-                        twitter_clean = twitter.replace("@", "").replace("https://x.com/", "").replace("https://twitter.com/", "").strip()
-                        enhanced_message += f"\n👤 Twitter: [@{twitter_clean}](https://x.com/{twitter_clean})"
-                        twitter_section_added = True
-                        logger.info(f"Only main Twitter available: @{twitter_clean}")
-                    elif creator_twitter:
-                        # Only creator Twitter available
-                        creator_clean = creator_twitter.replace("@", "").replace("https://x.com/", "").replace("https://twitter.com/", "").strip()
-                        enhanced_message += f"\n👤 Creator: [@{creator_clean}](https://x.com/{creator_clean})"
-                        twitter_section_added = True
-                        logger.info(f"Only creator Twitter available: @{creator_clean}")
+                    def clean_twitter_handle(handle):
+                        """Clean a Twitter handle removing prefixes and URLs"""
+                        if not handle:
+                            return ""
+                        return handle.replace("@", "").replace("https://x.com/", "").replace("https://twitter.com/", "").replace("https://www.x.com/", "").replace("https://www.twitter.com/", "").strip()
                     
-                    if not twitter_section_added:
-                        logger.warning(f"No Twitter information found for token {mint_address}")
-                        logger.info(f"Raw twitter field: '{twitter}', raw creator_twitter field: '{creator_twitter}'")
+                    creator_clean = clean_twitter_handle(creator_twitter)
+                    fee_clean = clean_twitter_handle(twitter)
+                    
+                    logger.info(f"Twitter analysis - Creator: '{creator_clean}', Fee Recipient: '{fee_clean}'")
+                    
+                    if creator_clean and fee_clean and creator_clean.lower() != fee_clean.lower():
+                        # CREATOR FEE SPLIT - Different people
+                        enhanced_message += f"\n👤 Creator: [@{creator_clean}](https://x.com/{creator_clean})"
+                        enhanced_message += f"\n💰 Creator Fees: [@{fee_clean}](https://x.com/{fee_clean})"
+                        twitter_section_added = True
+                        logger.info(f"✅ CREATOR FEE SPLIT detected - Creator: @{creator_clean}, Fee Recipient: @{fee_clean}")
+                    elif creator_clean and fee_clean and creator_clean.lower() == fee_clean.lower():
+                        # Same person for both creator and fees
+                        enhanced_message += f"\n👤 Creator: [@{creator_clean}](https://x.com/{creator_clean})"
+                        enhanced_message += f"\n💰 Creator Fees: Same as creator"
+                        twitter_section_added = True
+                        logger.info(f"✅ Same person for creator and fees: @{creator_clean}")
+                    elif creator_clean and not fee_clean:
+                        # Only creator Twitter available
+                        enhanced_message += f"\n👤 Creator: [@{creator_clean}](https://x.com/{creator_clean})"
+                        enhanced_message += f"\n💰 Creator Fees: Unknown recipient"
+                        twitter_section_added = True
+                        logger.info(f"✅ Only creator Twitter available: @{creator_clean}")
+                    elif not creator_clean and fee_clean:
+                        # Only fee recipient Twitter available
+                        enhanced_message += f"\n👤 Creator: Unknown"
+                        enhanced_message += f"\n💰 Creator Fees: [@{fee_clean}](https://x.com/{fee_clean})"
+                        twitter_section_added = True
+                        logger.info(f"✅ Only fee recipient Twitter available: @{fee_clean}")
+                    elif not creator_clean and not fee_clean:
+                        # No Twitter info available
+                        enhanced_message += f"\n👤 Creator: Unknown"
+                        enhanced_message += f"\n💰 Creator Fees: Unknown recipient"
+                        twitter_section_added = True
+                        logger.warning(f"❌ No Twitter information found for token {mint_address}")
+                    
+                    logger.info(f"Raw twitter fields - creator_twitter: '{creator_twitter}', twitter: '{twitter}'")
                     
                     enhanced_message += f"\nRoyalty: {royalty_percent}%"
                     
