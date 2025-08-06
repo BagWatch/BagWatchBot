@@ -311,26 +311,28 @@ async def process_new_token(mint_address: str):
         logger.info(f"Processing new token: {mint_address}")
         seen_mints.add(mint_address)
         
-        # Fetch token metadata
-        metadata = fetch_token_metadata_via_rpc(mint_address)
-        if not metadata:
-            logger.warning(f"Could not fetch metadata for {mint_address}")
-            return
-        
-        # Get URI from metadata
-        uri = metadata.get("uri")
-        if not uri:
-            logger.warning(f"No URI found in metadata for {mint_address}")
-            return
-        
-        # Fetch IPFS metadata
-        ipfs_data = fetch_ipfs_metadata(uri)
-        if not ipfs_data:
-            logger.warning(f"Could not fetch IPFS data for {mint_address}")
-            return
-        
-        # Send to Telegram
-        await send_telegram_message(mint_address, metadata, ipfs_data)
+        # For now, send a simple notification until we fix metadata parsing
+        try:
+            simple_message = f"""🚀 NEW BAGS TOKEN DETECTED!
+
+Contract: `{mint_address}`
+[View on Solscan](https://solscan.io/token/{mint_address})
+
+⚠️ Full metadata parsing coming soon!"""
+
+            await telegram_bot.send_message(
+                chat_id=CHANNEL_ID,
+                text=simple_message,
+                parse_mode=ParseMode.MARKDOWN_V2,
+                disable_web_page_preview=False
+            )
+            logger.info(f"✅ Posted simple notification for token: {mint_address}")
+        except Exception as e:
+            logger.error(f"❌ Failed to post simple notification: {e}")
+            
+        # TODO: Add back full metadata processing once basic detection works
+        # metadata = fetch_token_metadata_via_rpc(mint_address)
+        # ... rest of metadata processing
         
     except Exception as e:
         logger.error(f"Error processing token {mint_address}: {e}")
@@ -619,31 +621,29 @@ async def main():
     except Exception as e:
         logger.warning(f"Error testing recent transactions: {e}")
     
-    # Test Telegram posting with a sample token (for debugging)
-    if os.getenv("TEST_MODE") == "true":
-        logger.info("🧪 TEST MODE: Sending sample token post...")
+    # Always test Telegram connection by sending a simple message
+    logger.info("🧪 Testing Telegram channel connection...")
+    try:
+        test_message = "🤖 BagWatch Bot is online and monitoring Bags launchpad!"
+        
+        await telegram_bot.send_message(
+            chat_id=CHANNEL_ID,
+            text=test_message
+        )
+        logger.info("✅ Telegram connection test successful!")
+    except Exception as e:
+        logger.error(f"❌ Telegram connection test failed: {e}")
+        logger.error(f"Channel ID: {CHANNEL_ID}")
+        logger.error(f"Bot token starts with: {TELEGRAM_TOKEN[:10]}...")
+        
+        # Try to get bot info for debugging
         try:
-            test_message = """🚀 *Test Token Launch*
-
-*Name:* Sample Token
-*Ticker:* TEST
-*Contract:* `SampleMintAddress123456789`
-[View on Solscan](https://solscan.io/token/SampleMintAddress123456789)
-
-*Twitter:* [@testtoken](https://x.com/testtoken)
-*Royalty:* 5%
-
-🧪 This is a test message from BagWatch Bot"""
-
-            await telegram_bot.send_message(
-                chat_id=CHANNEL_ID,
-                text=test_message,
-                parse_mode=ParseMode.MARKDOWN_V2,
-                disable_web_page_preview=False
-            )
-            logger.info("✅ Test message sent successfully!")
-        except Exception as e:
-            logger.error(f"❌ Test message failed: {e}")
+            bot_info = await telegram_bot.get_me()
+            logger.error(f"Bot info: {bot_info.username}, can_join_groups: {bot_info.can_join_groups}")
+        except Exception as bot_error:
+            logger.error(f"Can't get bot info: {bot_error}")
+        
+        return  # Exit if we can't post to Telegram
     
     # Start WebSocket monitoring
     ws_thread = start_websocket()
