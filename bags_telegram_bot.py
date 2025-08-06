@@ -429,12 +429,23 @@ async def process_new_token(mint_address: str):
                         for key in fee_related_keys:
                             logger.info(f"  {key}: {asset_data[key]}")
                     
-                    # Also check creators array for royalty info
+                    # Also check creators array for royalty info AND fee recipients
                     creators = asset_data.get("creators", [])
                     if creators:
                         logger.info(f"Creators data: {creators}")
                         total_creator_share = sum(creator.get("share", 0) for creator in creators)
                         logger.info(f"Total creator share: {total_creator_share}%")
+                        
+                        # Check if any creator has a Twitter handle (potential fee recipient)
+                        for i, creator in enumerate(creators):
+                            creator_address = creator.get("address", "")
+                            creator_share = creator.get("share", 0)
+                            logger.info(f"Creator {i}: address={creator_address}, share={creator_share}%")
+                            
+                            # Log any additional creator fields that might contain Twitter info
+                            for key, value in creator.items():
+                                if key not in ['address', 'share', 'verified']:
+                                    logger.info(f"  Creator {i} extra field: {key} = {value}")
                         
                         # Sometimes royalty info is in the creators array
                         if total_creator_share > 0 and creator_royalty == 0:
@@ -455,7 +466,11 @@ async def process_new_token(mint_address: str):
                                 json_data = json_response.json()
                                 image_uri = json_data.get("image", "")
                                 
-                                # Look for FEE RECIPIENT specifically (not social links)
+                                # Look for FEE RECIPIENT in metadata structure
+                                # Based on user's finding: fee recipient info is often between website and image
+                                fee_recipient_twitter = ""
+                                
+                                # First check standard fee recipient fields
                                 fee_recipient_twitter = (
                                     json_data.get("fee_recipient", "") or
                                     json_data.get("fee_recipient_twitter", "") or
@@ -466,8 +481,42 @@ async def process_new_token(mint_address: str):
                                     json_data.get("royalty_recipient", "") or
                                     json_data.get("royaltyRecipient", "") or
                                     json_data.get("seller_fee_recipient", "") or
-                                    json_data.get("sellerFeeRecipient", "")
-                                )  # Actual fee recipient for 90% split
+                                    json_data.get("sellerFeeRecipient", "") or
+                                    json_data.get("royalties_to", "") or
+                                    json_data.get("royaltiesTo", "")
+                                )
+                                
+                                # If no standard fields, look for fields positioned between website and image
+                                if not fee_recipient_twitter:
+                                    # Get all keys and find position of website and image
+                                    keys = list(json_data.keys())
+                                    website_idx = -1
+                                    image_idx = -1
+                                    
+                                    for i, key in enumerate(keys):
+                                        if key == "website":
+                                            website_idx = i
+                                        elif key == "image":
+                                            image_idx = i
+                                    
+                                    # Look for fields between website and image that might contain Twitter info
+                                    if website_idx != -1 and image_idx != -1:
+                                        between_fields = keys[website_idx+1:image_idx]
+                                        logger.info(f"Fields between website and image: {between_fields}")
+                                        
+                                        for field in between_fields:
+                                            value = json_data.get(field, "")
+                                            if value and isinstance(value, str):
+                                                # Check if this field contains Twitter info
+                                                if any(term in value.lower() for term in ['twitter.com', 'x.com', '@']):
+                                                    logger.info(f"Found potential fee recipient in field '{field}': {value}")
+                                                    fee_recipient_twitter = value
+                                                    break
+                                                # Also check if it's just a Twitter handle
+                                                elif field.lower() in ['twitter', 'x', 'handle', 'account']:
+                                                    logger.info(f"Found potential fee recipient in field '{field}': {value}")
+                                                    fee_recipient_twitter = value
+                                                    break
                                 
                                 # Look for SOCIAL/PROJECT Twitter (separate from fee recipient)
                                 social_twitter = (
@@ -499,11 +548,22 @@ async def process_new_token(mint_address: str):
                                 logger.info(f"  social_twitter (project social): '{social_twitter}'")
                                 logger.info(f"  creator_twitter: '{creator_twitter}'")
                                 
-                                # Log ALL fields to help identify the correct fee recipient field
-                                logger.info(f"ALL JSON fields for debugging:")
+                                # Log COMPLETE JSON structure for debugging
+                                logger.info(f"COMPLETE JSON metadata structure:")
+                                for i, (key, value) in enumerate(json_data.items()):
+                                    logger.info(f"  [{i}] {key}: '{value}'")
+                                
+                                # Log field order to identify positioning patterns
+                                keys_order = list(json_data.keys())
+                                logger.info(f"Field order: {keys_order}")
+                                
+                                # Special focus on fields that might contain fee recipient info
+                                potential_fee_fields = []
                                 for key, value in json_data.items():
-                                    if any(term in key.lower() for term in ['twitter', 'fee', 'recipient', 'share', 'royalt', 'social']):
-                                        logger.info(f"    {key}: '{value}'")
+                                    if any(term in key.lower() for term in ['twitter', 'fee', 'recipient', 'share', 'royalt', 'social', 'split']):
+                                        potential_fee_fields.append(f"{key}: '{value}'")
+                                if potential_fee_fields:
+                                    logger.info(f"Potential fee-related fields: {potential_fee_fields}")
                                 
                                 # Check multiple possible royalty/creator fee fields with better logging
                                 royalty_fields_to_check = [
