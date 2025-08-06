@@ -469,8 +469,8 @@ Contract: {mint_address}
 Solscan: https://solscan.io/token/{mint_address}
 
 📈 TRADE NOW:
-• AXIOM: https://axiom.trade/@bagwatch
-• Photon: https://photon-sol.tinyastro.io/@BagWatch"""
+• AXIOM: https://axiom.trade/@bagwatch/{mint_address}
+• Photon: https://photon-sol.tinyastro.io/en/r/@BagWatch/{mint_address}"""
 
                     # Handle Twitter links intelligently
                     if creator_twitter and twitter and creator_twitter != twitter:
@@ -526,8 +526,8 @@ Contract: {mint_address}
 Solscan: https://solscan.io/token/{mint_address}
 
 📈 TRADE NOW:
-• AXIOM: https://axiom.trade/@bagwatch
-• Photon: https://photon-sol.tinyastro.io/@BagWatch
+• AXIOM: https://axiom.trade/@bagwatch/{mint_address}
+• Photon: https://photon-sol.tinyastro.io/en/r/@BagWatch/{mint_address}
 
 ⚠️ Metadata temporarily unavailable"""
 
