@@ -65,6 +65,9 @@ WS_URL = "wss://api.mainnet-beta.solana.com"
 if HELIUS_API_KEY:
     WS_URL = f"wss://mainnet.helius-rpc.com/?api-key={HELIUS_API_KEY}"
 
+# Debug flag to control detailed logging (set to False for production)
+DEBUG_METADATA = os.getenv("DEBUG_METADATA", "false").lower() == "true"
+
 # ============================================================================
 # LOGGING SETUP
 # ============================================================================
@@ -502,7 +505,8 @@ async def process_new_token(mint_address: str):
                                     # Look for fields between website and image that might contain Twitter info
                                     if website_idx != -1 and image_idx != -1:
                                         between_fields = keys[website_idx+1:image_idx]
-                                        logger.info(f"Fields between website and image: {between_fields}")
+                                        if DEBUG_METADATA:
+                                            logger.info(f"Fields between website and image: {between_fields}")
                                         
                                         for field in between_fields:
                                             value = json_data.get(field, "")
@@ -548,16 +552,17 @@ async def process_new_token(mint_address: str):
                                 logger.info(f"  social_twitter (project social): '{social_twitter}'")
                                 logger.info(f"  creator_twitter: '{creator_twitter}'")
                                 
-                                # Log COMPLETE JSON structure for debugging
-                                logger.info(f"COMPLETE JSON metadata structure:")
-                                for i, (key, value) in enumerate(json_data.items()):
-                                    logger.info(f"  [{i}] {key}: '{value}'")
+                                # Log COMPLETE JSON structure for debugging (only when debug flag is enabled)
+                                if DEBUG_METADATA:
+                                    logger.info(f"COMPLETE JSON metadata structure:")
+                                    for i, (key, value) in enumerate(json_data.items()):
+                                        logger.info(f"  [{i}] {key}: '{value}'")
+                                    
+                                    # Log field order to identify positioning patterns
+                                    keys_order = list(json_data.keys())
+                                    logger.info(f"Field order: {keys_order}")
                                 
-                                # Log field order to identify positioning patterns
-                                keys_order = list(json_data.keys())
-                                logger.info(f"Field order: {keys_order}")
-                                
-                                # Special focus on fields that might contain fee recipient info
+                                # Always log potential fee fields (minimal impact)
                                 potential_fee_fields = []
                                 for key, value in json_data.items():
                                     if any(term in key.lower() for term in ['twitter', 'fee', 'recipient', 'share', 'royalt', 'social', 'split']):
