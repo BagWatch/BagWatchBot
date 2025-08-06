@@ -65,8 +65,8 @@ WS_URL = "wss://api.mainnet-beta.solana.com"
 if HELIUS_API_KEY:
     WS_URL = f"wss://mainnet.helius-rpc.com/?api-key={HELIUS_API_KEY}"
 
-# Debug flag to control detailed logging (set to False for production)
-DEBUG_METADATA = os.getenv("DEBUG_METADATA", "false").lower() == "true"
+# Debug flag to control detailed logging (temporarily enabled to debug fee recipient issue)
+DEBUG_METADATA = os.getenv("DEBUG_METADATA", "true").lower() == "true"
 
 # ============================================================================
 # LOGGING SETUP
@@ -383,6 +383,12 @@ async def process_new_token(mint_address: str):
                 asset_data = metadata_response.json().get("result", {})
                 
                 if asset_data:
+                    # Log the complete Helius response structure for debugging
+                    if DEBUG_METADATA:
+                        logger.info(f"HELIUS RESPONSE STRUCTURE:")
+                        for key, value in asset_data.items():
+                            logger.info(f"  Helius.{key}: {type(value)} = {value}")
+                    
                     content = asset_data.get("content", {})
                     metadata = content.get("metadata", {})
                     
