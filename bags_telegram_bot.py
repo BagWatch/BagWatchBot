@@ -623,39 +623,32 @@ Contract: {mint_address}
                     logger.info(f"Twitter analysis - Creator: '{creator_clean}', Fee Recipient: '{fee_clean}'")
                     
                     if creator_clean and fee_clean and creator_clean.lower() != fee_clean.lower():
-                        # BAGS FEE SPLIT - Always 10% creator, 90% chosen account
-                        enhanced_message += f"\n👤 Creator: [@{creator_clean}](https://x.com/{creator_clean}) (10% of fees)"
-                        enhanced_message += f"\n💰 Fee Split: [@{fee_clean}](https://x.com/{fee_clean}) (90% of fees)"
+                        # BAGS FEE SPLIT - 90% to chosen account
+                        enhanced_message += f"\n💰 90% Fee Split: [@{fee_clean}](https://x.com/{fee_clean})"
                         twitter_section_added = True
-                        logger.info(f"✅ BAGS FEE SPLIT detected - Creator: @{creator_clean} (10%), Fee Split: @{fee_clean} (90%)")
+                        logger.info(f"✅ BAGS FEE SPLIT detected - 90% to @{fee_clean}, 10% to creator")
                     elif creator_clean and fee_clean and creator_clean.lower() == fee_clean.lower():
                         # Same person for both creator and fees (no split)
-                        enhanced_message += f"\n👤 Creator: [@{creator_clean}](https://x.com/{creator_clean})"
-                        enhanced_message += f"\n💰 Fee Split: All fees to creator (no split)"
+                        enhanced_message += f"\n💰 90% Fee Split: No split (creator keeps all)"
                         twitter_section_added = True
-                        logger.info(f"✅ No fee split - all fees to creator: @{creator_clean}")
+                        logger.info(f"✅ No fee split - creator keeps all fees: @{creator_clean}")
                     elif creator_clean and not fee_clean:
-                        # Only creator Twitter available (likely no fee split)
-                        enhanced_message += f"\n👤 Creator: [@{creator_clean}](https://x.com/{creator_clean})"
-                        enhanced_message += f"\n💰 Fee Split: All fees to creator (no split)"
+                        # Only creator Twitter available (no fee split)
+                        enhanced_message += f"\n💰 90% Fee Split: No split (creator keeps all)"
                         twitter_section_added = True
-                        logger.info(f"✅ Only creator available, no fee split: @{creator_clean}")
+                        logger.info(f"✅ No fee split detected - creator keeps all")
                     elif not creator_clean and fee_clean:
-                        # Only fee recipient Twitter available (unusual case)
-                        enhanced_message += f"\n👤 Creator: Unknown"
-                        enhanced_message += f"\n💰 Fee Split: [@{fee_clean}](https://x.com/{fee_clean}) (likely 90% split)"
+                        # Only fee recipient Twitter available
+                        enhanced_message += f"\n💰 90% Fee Split: [@{fee_clean}](https://x.com/{fee_clean})"
                         twitter_section_added = True
-                        logger.info(f"✅ Only fee recipient available: @{fee_clean}")
+                        logger.info(f"✅ Fee split to @{fee_clean}")
                     elif not creator_clean and not fee_clean:
                         # No Twitter info available
-                        enhanced_message += f"\n👤 Creator: Unknown"
-                        enhanced_message += f"\n💰 Fee Split: Unknown"
+                        enhanced_message += f"\n💰 90% Fee Split: Unknown"
                         twitter_section_added = True
-                        logger.warning(f"❌ No Twitter information found for token {mint_address}")
+                        logger.warning(f"❌ No fee split information found for token {mint_address}")
                     
                     logger.info(f"Raw twitter fields - creator_twitter: '{creator_twitter}', twitter: '{twitter}'")
-                    
-                    enhanced_message += f"\nRoyalty: {royalty_percent}%"
                     
                     if website:
                         enhanced_message += f"\nWebsite: {website}"
