@@ -474,9 +474,18 @@ async def process_new_token(mint_address: str):
                                 
                                 website = json_data.get("website", "")
                                 
-                                # Debug the Twitter fields
+                                # Debug the Twitter fields with all possible variations
                                 logger.info(f"JSON metadata keys: {list(json_data.keys())}")
-                                logger.info(f"Twitter data - twitter (fee recipient): '{twitter}', creator_twitter: '{creator_twitter}'")
+                                logger.info(f"Raw Twitter data extracted:")
+                                logger.info(f"  twitter (fee recipient): '{twitter}'")
+                                logger.info(f"  creator_twitter: '{creator_twitter}'")
+                                
+                                # Log all Twitter-related fields for debugging
+                                twitter_related_fields = [key for key in json_data.keys() if 'twitter' in key.lower() or 'x.com' in str(json_data[key]).lower()]
+                                if twitter_related_fields:
+                                    logger.info(f"All Twitter-related fields found:")
+                                    for field in twitter_related_fields:
+                                        logger.info(f"    {field}: '{json_data[field]}'")
                                 
                                 # Check multiple possible royalty/creator fee fields with better logging
                                 royalty_fields_to_check = [
@@ -576,10 +585,37 @@ Contract: {mint_address}
                     twitter_section_added = False
                     
                     def clean_twitter_handle(handle):
-                        """Clean a Twitter handle removing prefixes and URLs"""
+                        """Clean a Twitter handle removing prefixes, URLs, and extracting username from tweet URLs"""
                         if not handle:
                             return ""
-                        return handle.replace("@", "").replace("https://x.com/", "").replace("https://twitter.com/", "").replace("https://www.x.com/", "").replace("https://www.twitter.com/", "").strip()
+                        
+                        # Log what we're cleaning for debugging
+                        logger.info(f"Cleaning Twitter handle: '{handle}'")
+                        
+                        # Handle tweet URLs like "@AutismCapital/status/1952927615414837319"
+                        if "/status/" in handle:
+                            # Extract just the username part before /status/
+                            username = handle.split("/status/")[0]
+                            logger.info(f"Extracted username from tweet URL: '{username}'")
+                            handle = username
+                        
+                        # Clean common prefixes and domains
+                        cleaned = (handle
+                                 .replace("@", "")
+                                 .replace("https://x.com/", "")
+                                 .replace("https://twitter.com/", "")
+                                 .replace("https://www.x.com/", "")
+                                 .replace("https://www.twitter.com/", "")
+                                 .replace("x.com/", "")
+                                 .replace("twitter.com/", "")
+                                 .strip())
+                        
+                        # Remove any remaining path components (like additional slashes)
+                        if "/" in cleaned:
+                            cleaned = cleaned.split("/")[0]
+                        
+                        logger.info(f"Final cleaned handle: '{cleaned}'")
+                        return cleaned
                     
                     creator_clean = clean_twitter_handle(creator_twitter)
                     fee_clean = clean_twitter_handle(twitter)
