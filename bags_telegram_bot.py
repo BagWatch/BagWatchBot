@@ -338,21 +338,36 @@ async def process_new_token(mint_address: str):
 def parse_log_message(log_data: Dict) -> Optional[str]:
     """Parse log message to extract mint address if it's a Bags token"""
     try:
-        # This is a simplified parser - you'd need to implement proper log parsing
-        # based on the specific structure of Metaplex metadata program logs
-        
-        # Look for account keys and check if update authority matches Bags
         logs = log_data.get("logs", [])
+        account_keys = log_data.get("value", {}).get("transaction", {}).get("message", {}).get("accountKeys", [])
         
-        # Simple pattern matching for demonstration
+        # Check if this transaction involves the Bags update authority
+        bags_involved = False
+        for key in account_keys:
+            if key == BAGS_UPDATE_AUTHORITY:
+                bags_involved = True
+                break
+        
+        if not bags_involved:
+            return None
+        
+        # Look for metadata creation in logs
         for log in logs:
-            if "CreateMetadataAccountV3" in log or "CreateMetadataAccount" in log:
-                # Extract mint address from the log
-                # This is a placeholder - actual implementation would parse the instruction data
-                pass
+            if any(keyword in log for keyword in [
+                "CreateMetadataAccountV3", 
+                "CreateMetadataAccount",
+                "Program metaq invoke",
+                "CreateMasterEditionV3"
+            ]):
+                logger.info(f"Potential Bags token creation detected in logs: {log}")
+                
+                # Try to extract mint address from account keys
+                # Usually the mint is one of the first accounts after the program
+                for account in account_keys[:10]:  # Check first 10 accounts
+                    if account != METADATA_PROGRAM_ID and account != BAGS_UPDATE_AUTHORITY and len(account) > 40:
+                        logger.info(f"Found potential mint address: {account}")
+                        return account
         
-        # For demo purposes, return None
-        # In production, you'd parse the actual instruction data
         return None
         
     except Exception as e:
@@ -378,11 +393,33 @@ def on_websocket_message(ws, message):
             params = data.get("params", {})
             result = params.get("result", {})
             
+            # Log all transactions for debugging
+            logs = result.get("logs", [])
+            if any("metaq" in log.lower() for log in logs):
+                logger.info(f"Metaplex transaction detected with {len(logs)} logs")
+                logger.debug(f"Transaction logs: {logs[:3]}...")  # First 3 logs
+            
             # Parse the log message
             mint_address = parse_log_message(result)
             if mint_address:
+                logger.info(f"🎯 BAGS TOKEN DETECTED: {mint_address}")
                 # Process in background
                 asyncio.create_task(process_new_token(mint_address))
+        
+        # Handle program account notifications
+        elif "method" in data and data["method"] == "programNotification":
+            params = data.get("params", {})
+            result = params.get("result", {})
+            logger.info(f"📋 Program account notification received")
+            logger.info(f"Account pubkey: {result.get('pubkey', 'unknown')}")
+            
+            # This could be a new metadata account created by Bags
+            account_pubkey = result.get("pubkey")
+            if account_pubkey:
+                logger.info(f"🎯 POTENTIAL BAGS METADATA ACCOUNT: {account_pubkey}")
+                # You might want to derive the mint from the metadata account
+                # For now, let's log it for debugging
+            
         
     except Exception as e:
         logger.error(f"Error processing WebSocket message: {e}")
@@ -401,7 +438,7 @@ def on_websocket_open(ws):
     logger.info("WebSocket connection opened")
     
     # Subscribe to logs for the Metaplex Metadata program
-    subscribe_message = {
+    subscribe_message1 = {
         "jsonrpc": "2.0",
         "id": 1,
         "method": "logsSubscribe",
@@ -415,8 +452,48 @@ def on_websocket_open(ws):
         ]
     }
     
-    ws.send(json.dumps(subscribe_message))
+    # Also subscribe specifically to transactions involving Bags update authority
+    subscribe_message2 = {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "logsSubscribe",
+        "params": [
+            {
+                "mentions": [BAGS_UPDATE_AUTHORITY]
+            },
+            {
+                "commitment": "confirmed"
+            }
+        ]
+    }
+    
+    # Subscribe to program account changes for more comprehensive monitoring
+    subscribe_message3 = {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "programSubscribe",
+        "params": [
+            METADATA_PROGRAM_ID,
+            {
+                "commitment": "confirmed",
+                "filters": [
+                    {
+                        "memcmp": {
+                            "offset": 1,
+                            "bytes": BAGS_UPDATE_AUTHORITY
+                        }
+                    }
+                ]
+            }
+        ]
+    }
+    
+    ws.send(json.dumps(subscribe_message1))
+    ws.send(json.dumps(subscribe_message2))
+    ws.send(json.dumps(subscribe_message3))
     logger.info("Subscribed to Metaplex Metadata program logs")
+    logger.info("Subscribed to Bags update authority transactions")
+    logger.info("Subscribed to Metaplex program account changes")
 
 def start_websocket():
     """Start WebSocket connection in a separate thread"""
@@ -452,6 +529,12 @@ async def main():
     """Main application entry point"""
     global telegram_bot
     
+    # Debug environment variables (without exposing full tokens)
+    logger.info(f"TELEGRAM_TOKEN configured: {bool(TELEGRAM_TOKEN)}")
+    logger.info(f"CHANNEL_ID configured: {bool(CHANNEL_ID)}")
+    logger.info(f"HELIUS_API_KEY configured: {bool(HELIUS_API_KEY)}")
+    logger.info(f"Using RPC URL: {RPC_URL[:50]}..." if len(RPC_URL) > 50 else f"Using RPC URL: {RPC_URL}")
+    
     # Validate configuration
     if not TELEGRAM_TOKEN:
         logger.error("Please set TELEGRAM_TOKEN environment variable")
@@ -465,6 +548,7 @@ async def main():
     telegram_bot = Bot(token=TELEGRAM_TOKEN)
     
     logger.info("Starting Bags Launchpad Telegram Bot...")
+    logger.info(f"Monitoring for tokens from deployer: {BAGS_UPDATE_AUTHORITY}")
     
     # Test Telegram connection
     try:
@@ -473,6 +557,27 @@ async def main():
     except Exception as e:
         logger.error(f"Failed to connect to Telegram: {e}")
         return
+    
+    # Test function to check recent transactions for debugging
+    try:
+        logger.info("Testing recent transactions from Bags deployer...")
+        payload = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "getSignaturesForAddress",
+            "params": [BAGS_UPDATE_AUTHORITY, {"limit": 5}]
+        }
+        response = requests.post(RPC_URL, json=payload, timeout=10)
+        if response.status_code == 200:
+            result = response.json()
+            signatures = result.get("result", [])
+            logger.info(f"Found {len(signatures)} recent transactions from Bags deployer")
+            if signatures:
+                logger.info(f"Most recent signature: {signatures[0].get('signature', 'unknown')}")
+        else:
+            logger.warning(f"Failed to fetch recent transactions: {response.status_code}")
+    except Exception as e:
+        logger.warning(f"Error testing recent transactions: {e}")
     
     # Start WebSocket monitoring
     ws_thread = start_websocket()
