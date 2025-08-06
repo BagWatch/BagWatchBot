@@ -644,7 +644,7 @@ Contract: {mint_address}
                         logger.info(f"✅ Fee split to @{fee_clean}")
                     elif not creator_clean and not fee_clean:
                         # No Twitter info available
-                        enhanced_message += f"\n💰 90% Fee Split: Unknown"
+                        enhanced_message += f"\n💰 90% Fee Split: None"
                         twitter_section_added = True
                         logger.warning(f"❌ No fee split information found for token {mint_address}")
                     
