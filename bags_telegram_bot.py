@@ -80,6 +80,7 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 
 seen_mints: Set[str] = set()
+seen_signatures: Set[str] = set()
 telegram_bot: Optional[Bot] = None
 
 # ============================================================================
@@ -259,6 +260,11 @@ def escape_markdown(text: str) -> str:
 async def check_transaction_for_token_creation(signature: str):
     """Check a specific transaction for token creation"""
     try:
+        # Skip if already processed
+        if signature in seen_signatures:
+            return
+        seen_signatures.add(signature)
+        
         # Get transaction details
         payload = {
             "jsonrpc": "2.0",
@@ -360,14 +366,103 @@ async def process_new_token(mint_address: str):
         logger.info(f"Processing new token: {mint_address}")
         seen_mints.add(mint_address)
         
-        # For now, send a simple notification until we fix metadata parsing
+        # Try to get full metadata and format properly
         try:
-            simple_message = f"""🚀 NEW BAGS TOKEN DETECTED!
+            # First try to get metadata URI using Helius API
+            metadata_payload = {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "getAsset",
+                "params": {"id": mint_address}
+            }
+            
+            metadata_response = requests.post(RPC_URL, json=metadata_payload, timeout=10)
+            if metadata_response.status_code == 200:
+                asset_data = metadata_response.json().get("result", {})
+                
+                if asset_data:
+                    # Extract token info from Helius response
+                    content = asset_data.get("content", {})
+                    metadata = content.get("metadata", {})
+                    
+                    name = metadata.get("name", "Unknown Token")
+                    symbol = metadata.get("symbol", "UNKNOWN")
+                    
+                    # Get additional metadata from JSON URI if available
+                    json_uri = content.get("json_uri", "")
+                    image_uri = ""
+                    twitter = ""
+                    creator_twitter = ""
+                    website = ""
+                    royalty_percent = 0
+                    
+                    if json_uri:
+                        try:
+                            json_response = requests.get(json_uri, timeout=10)
+                            if json_response.status_code == 200:
+                                json_data = json_response.json()
+                                image_uri = json_data.get("image", "")
+                                twitter = json_data.get("twitter", "")
+                                creator_twitter = json_data.get("creator_twitter", "")
+                                website = json_data.get("website", "")
+                                royalty_bps = json_data.get("sellerFeeBasisPoints", 0)
+                                royalty_percent = royalty_bps / 100 if royalty_bps else 0
+                        except:
+                            pass
+                    
+                    # Format the beautiful message
+                    message = f"""🚀 *New Coin Launched on Bags\\!*
 
-Contract: `{mint_address}`
-[View on Solscan](https://solscan.io/token/{mint_address})
+*Name:* {escape_markdown(name)}
+*Ticker:* {escape_markdown(symbol)}
+*Contract:* `{escape_markdown(mint_address)}`
+[View on Solscan](https://solscan.io/token/{mint_address})"""
 
-⚠️ Full metadata parsing coming soon!"""
+                    # Add Twitter links
+                    if creator_twitter and creator_twitter != twitter:
+                        creator_link = f"[@{creator_twitter}](https://x.com/{creator_twitter})"
+                        fee_link = f"[@{twitter}](https://x.com/{twitter})" if twitter else "N/A"
+                        message += f"\n\n*Creator:* {creator_link}\n*Fee Recipient:* {fee_link}"
+                    elif twitter:
+                        twitter_link = f"[@{twitter}](https://x.com/{twitter})"
+                        message += f"\n\n*Twitter:* {twitter_link}"
+                    
+                    # Add royalty
+                    message += f"\n*Royalty:* {royalty_percent}%"
+                    
+                    # Add website
+                    if website:
+                        message += f"\n\n[Website]({website})"
+                    
+                    # Send with image if available
+                    if image_uri:
+                        try:
+                            await telegram_bot.send_photo(
+                                chat_id=CHANNEL_ID,
+                                photo=image_uri,
+                                caption=message,
+                                parse_mode=ParseMode.MARKDOWN_V2
+                            )
+                            logger.info(f"✅ Posted full token info with image: {mint_address}")
+                            return
+                        except Exception as img_error:
+                            logger.warning(f"Failed to send with image: {img_error}")
+                    
+                    # Send as text message
+                    await telegram_bot.send_message(
+                        chat_id=CHANNEL_ID,
+                        text=message,
+                        parse_mode=ParseMode.MARKDOWN_V2,
+                        disable_web_page_preview=False
+                    )
+                    logger.info(f"✅ Posted full token info: {mint_address}")
+                    return
+            
+            # Fallback to simple message if metadata fails
+            simple_message = f"""🚀 NEW BAGS TOKEN DETECTED\\!
+
+*Contract:* `{escape_markdown(mint_address)}`
+[View on Solscan](https://solscan.io/token/{mint_address})"""
 
             await telegram_bot.send_message(
                 chat_id=CHANNEL_ID,
@@ -376,12 +471,9 @@ Contract: `{mint_address}`
                 disable_web_page_preview=False
             )
             logger.info(f"✅ Posted simple notification for token: {mint_address}")
-        except Exception as e:
-            logger.error(f"❌ Failed to post simple notification: {e}")
             
-        # TODO: Add back full metadata processing once basic detection works
-        # metadata = fetch_token_metadata_via_rpc(mint_address)
-        # ... rest of metadata processing
+        except Exception as e:
+            logger.error(f"❌ Failed to post token notification: {e}")
         
     except Exception as e:
         logger.error(f"Error processing token {mint_address}: {e}")
@@ -479,7 +571,7 @@ def on_websocket_message(ws, message):
                 # Parse the log message
                 mint_address = parse_log_message(result)
                 if mint_address:
-                    logger.info(f"🎯 BAGS TOKEN DETECTED: {mint_address}")
+                    logger.info(f"🎯 WEBSOCKET: Bags token detected: {mint_address}")
                     # Process in background
                     asyncio.create_task(process_new_token(mint_address))
                 else:
@@ -702,34 +794,41 @@ async def main():
     # Also poll for recent transactions as backup detection method
     last_signature = None
     
+    # Hybrid detection: WebSocket for instant + polling for backup
+    polling_counter = 0
+    
     # Keep the main thread alive and check for new transactions
     try:
         while True:
-            await asyncio.sleep(10)  # Check every 10 seconds
+            await asyncio.sleep(1)  # Check every 1 second
+            polling_counter += 1
             
-            # Check for new transactions from Bags deployer
-            try:
-                payload = {
-                    "jsonrpc": "2.0",
-                    "id": 1,
-                    "method": "getSignaturesForAddress",
-                    "params": [BAGS_UPDATE_AUTHORITY, {"limit": 5}]
-                }
-                response = requests.post(RPC_URL, json=payload, timeout=5)
-                if response.status_code == 200:
-                    result = response.json()
-                    signatures = result.get("result", [])
-                    
-                    if signatures and signatures[0].get("signature") != last_signature:
-                        new_signature = signatures[0].get("signature")
-                        logger.info(f"🔍 NEW TRANSACTION from Bags deployer: {new_signature}")
-                        last_signature = new_signature
+            # Poll every 3 seconds (when counter reaches 3)
+            if polling_counter >= 3:
+                polling_counter = 0
+                
+                try:
+                    payload = {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "getSignaturesForAddress",
+                        "params": [BAGS_UPDATE_AUTHORITY, {"limit": 3}]
+                    }
+                    response = requests.post(RPC_URL, json=payload, timeout=5)
+                    if response.status_code == 200:
+                        result = response.json()
+                        signatures = result.get("result", [])
                         
-                        # Get the full transaction details
-                        await check_transaction_for_token_creation(new_signature)
-                        
-            except Exception as e:
-                logger.debug(f"Error polling transactions: {e}")
+                        if signatures and signatures[0].get("signature") != last_signature:
+                            new_signature = signatures[0].get("signature")
+                            logger.info(f"🔍 POLLING: New Bags transaction: {new_signature}")
+                            last_signature = new_signature
+                            
+                            # Get the full transaction details
+                            await check_transaction_for_token_creation(new_signature)
+                            
+                except Exception as e:
+                    logger.debug(f"Error polling transactions: {e}")
             # Health check - could add ping to Telegram API here
     except KeyboardInterrupt:
         logger.info("Bot stopped by user")
