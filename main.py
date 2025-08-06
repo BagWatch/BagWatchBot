@@ -123,6 +123,19 @@ def clean_twitter_handle(handle: str) -> str:
     
     return cleaned
 
+def escape_markdown(text: str) -> str:
+    """Escape special characters for Telegram Markdown"""
+    if not text:
+        return ""
+    
+    # Characters that need escaping in Telegram Markdown
+    special_chars = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']
+    
+    for char in special_chars:
+        text = text.replace(char, f'\\{char}')
+    
+    return text
+
 def get_helius_metadata(mint_address: str) -> Dict:
     """Get complete metadata from Helius API including name, symbol, image, website, social"""
     try:
@@ -704,11 +717,11 @@ def format_telegram_message(mint_address: str, token_data: Dict) -> str:
                 "royalty_wallet": royalties_to.get("wallet")
             }
         
-        # Build the message
+        # Build the message with proper escaping
         message = f"""🚀 New Coin Launched on Bags!
 
-Name: {name}
-Ticker: {symbol}
+Name: {escape_markdown(name)}
+Ticker: {escape_markdown(symbol)}
 Mint: {mint_address}
 Solscan: https://solscan.io/token/{mint_address}
 """
@@ -735,7 +748,7 @@ Solscan: https://solscan.io/token/{mint_address}
         
         # Add project website if available (separate from Bags)
         if website and website != f"https://bags.fm/{mint_address}" and not website.startswith("https://bags.fm/"):
-            message += f"\nWebsite: {website}"
+            message += f"\nWebsite: {escape_markdown(website)}"
         
         # Add clean Bags link (not the long URL)
         message += f"\n\n🎒 [View on Bags](https://bags.fm/{mint_address})"
