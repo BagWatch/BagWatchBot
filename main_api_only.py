@@ -414,66 +414,8 @@ async def send_telegram_message(mint_address: str, token_data: Dict):
     except Exception as e:
         logger.error(f"Error sending Telegram message for {mint_address}: {e}")
 
-async def get_helius_metadata(mint_address: str) -> Dict:
-    """Get token metadata from Helius API for name, symbol, and image"""
-    if not HELIUS_API_KEY:
-        return {"name": None, "symbol": None, "image": None, "website": None}
-    
-    try:
-        url = f"https://mainnet.helius-rpc.com/?api-key={HELIUS_API_KEY}"
-        
-        payload = {
-            "jsonrpc": "2.0",
-            "id": "text",
-            "method": "getAsset",
-            "params": {"id": mint_address}
-        }
-        
-        response = requests.post(url, json=payload, timeout=10)
-        
-        if response.status_code == 200:
-            data = response.json()
-            result = data.get("result", {})
-            
-            # Extract metadata
-            content = result.get("content", {})
-            metadata = content.get("metadata", {})
-            
-            name = metadata.get("name", "").strip()
-            symbol = metadata.get("symbol", "").strip()
-            
-            # Get image from files
-            image_url = None
-            files = content.get("files", [])
-            if files and len(files) > 0:
-                image_url = files[0].get("uri")
-            
-            # Extract website from attributes
-            website = None
-            attributes = metadata.get("attributes", [])
-            for attr in attributes:
-                if attr.get("trait_type", "").lower() == "website":
-                    website = attr.get("value")
-                    break
-            
-            logger.info(f"✅ Helius metadata for {mint_address}: name={name}, symbol={symbol}")
-            
-            return {
-                "name": name if name else None,
-                "symbol": symbol if symbol else None, 
-                "image": image_url,
-                "website": website
-            }
-        
-        logger.warning(f"Helius API returned {response.status_code}")
-        return {"name": None, "symbol": None, "image": None, "website": None}
-        
-    except Exception as e:
-        logger.error(f"Failed to get Helius metadata: {e}")
-        return {"name": None, "symbol": None, "image": None, "website": None}
-
 async def process_new_token(mint_address: str):
-    """Process a newly detected token with hybrid approach: Bags API for fees + Helius for metadata"""
+    """Process a newly detected token using ONLY Bags API"""
     try:
         if mint_address in seen_mints:
             return
@@ -481,27 +423,12 @@ async def process_new_token(mint_address: str):
         logger.info(f"🔄 Processing new token: {mint_address}")
         seen_mints.add(mint_address)
         
-        # Get fee split data from Bags API
-        bags_data = get_bags_token_data(mint_address)
+        # Get ALL data from Bags API only
+        token_data = get_bags_token_data(mint_address)
         
-        # Get metadata from Helius  
-        helius_data = await get_helius_metadata(mint_address)
-        
-        if bags_data:
-            # Combine data - Helius for name/image, Bags for fee split
-            combined_data = {
-                "mint": mint_address,
-                "name": helius_data.get("name") or "Unknown Token",
-                "symbol": helius_data.get("symbol") or "UNKNOWN",
-                "image": helius_data.get("image"),
-                "website": helius_data.get("website"),
-                "createdBy": bags_data.get("createdBy", {}),
-                "royaltiesTo": bags_data.get("royaltiesTo", {}), 
-                "royaltyPercentage": bags_data.get("royaltyPercentage")
-            }
-            
-            logger.info(f"✅ Combined token data: name={combined_data['name']}, creator={combined_data['createdBy']}, royalty={combined_data['royaltiesTo']}")
-            await send_telegram_message(mint_address, combined_data)
+        if token_data:
+            logger.info(f"✅ Got token data from Bags API")
+            await send_telegram_message(mint_address, token_data)
         else:
             logger.warning(f"⚠️ No data from Bags API, sending basic notification")
             # Send basic fallback message
