@@ -500,11 +500,14 @@ async def process_new_token(mint_address: str):
         logger.info(f"🔄 Processing new token: {mint_address}")
         seen_mints.add(mint_address)
         
-        # Get fee split data from Bags API (fast)
+        # Get fee split data from Bags API (needs time to index)
+        logger.info(f"⏳ Waiting 3 seconds for Bags API to index creator information: {mint_address}")
+        await asyncio.sleep(3)
+        
         bags_data = get_bags_token_data(mint_address)
         
         if not bags_data:
-            logger.warning(f"⚠️ No data from Bags API, skipping token {mint_address}")
+            logger.warning(f"⚠️ No data from Bags API after 3s delay, skipping token {mint_address}")
             return
         
         # Get metadata from Helius with delay to allow indexing
@@ -715,7 +718,7 @@ async def main():
         # Test channel access
         await telegram_bot.send_message(
             chat_id=CHANNEL_ID,
-            text="✅ Bags Bot started! Monitoring for new tokens... (Hybrid API with 2s Helius delay & validation)"
+            text="✅ Bags Bot started! Monitoring for new tokens... (Hybrid API with 3s Bags + 2s Helius delays)"
         )
         logger.info(f"✅ Telegram connection test successful!")
         
@@ -723,9 +726,9 @@ async def main():
         logger.error(f"Failed to initialize Telegram bot: {e}")
         sys.exit(1)
     
-    logger.info("Starting Bags Launchpad Telegram Bot (HYBRID VERSION WITH 2S DELAY)...")
+    logger.info("Starting Bags Launchpad Telegram Bot (HYBRID VERSION WITH DUAL DELAYS)...")
     logger.info(f"Monitoring for tokens from deployer: {BAGS_UPDATE_AUTHORITY}")
-    logger.info(f"Using Bags API for fee split + Helius for metadata (with 2s indexing delay)")
+    logger.info(f"Using Bags API (3s delay) for fee split + Helius (2s delay) for metadata")
     
     # Log configuration for debugging
     logger.info("=" * 50)
