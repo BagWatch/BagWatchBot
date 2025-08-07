@@ -472,6 +472,21 @@ async def get_helius_metadata(mint_address: str) -> Dict:
         logger.error(f"Failed to get Helius metadata: {e}")
         return {"name": None, "symbol": None, "image": None, "website": None}
 
+async def get_helius_metadata_with_delay(mint_address: str) -> Dict:
+    """Get Helius metadata with short delay to allow indexing"""
+    logger.info(f"⏳ Waiting 2 seconds for Helius to index new token: {mint_address}")
+    await asyncio.sleep(2)
+    
+    logger.info(f"🔍 Fetching Helius metadata for {mint_address}")
+    helius_data = await get_helius_metadata(mint_address)
+    
+    if helius_data.get("name") and helius_data.get("symbol"):
+        logger.info(f"✅ Helius metadata found: {helius_data.get('name')} ({helius_data.get('symbol')})")
+    else:
+        logger.warning(f"⚠️ Helius metadata not yet available for {mint_address}")
+    
+    return helius_data
+
 async def process_new_token(mint_address: str):
     """Process a newly detected token with hybrid approach: Bags API for fees + Helius for metadata"""
     try:
@@ -481,38 +496,35 @@ async def process_new_token(mint_address: str):
         logger.info(f"🔄 Processing new token: {mint_address}")
         seen_mints.add(mint_address)
         
-        # Get fee split data from Bags API
+        # Get fee split data from Bags API (fast)
         bags_data = get_bags_token_data(mint_address)
         
-        # Get metadata from Helius  
-        helius_data = await get_helius_metadata(mint_address)
+        if not bags_data:
+            logger.warning(f"⚠️ No data from Bags API, skipping token {mint_address}")
+            return
         
-        if bags_data:
-            # Combine data - Helius for name/image, Bags for fee split
-            combined_data = {
-                "mint": mint_address,
-                "name": helius_data.get("name") or "Unknown Token",
-                "symbol": helius_data.get("symbol") or "UNKNOWN",
-                "image": helius_data.get("image"),
-                "website": helius_data.get("website"),
-                "createdBy": bags_data.get("createdBy", {}),
-                "royaltiesTo": bags_data.get("royaltiesTo", {}), 
-                "royaltyPercentage": bags_data.get("royaltyPercentage")
-            }
-            
-            logger.info(f"✅ Combined token data: name={combined_data['name']}, creator={combined_data['createdBy']}, royalty={combined_data['royaltiesTo']}")
-            await send_telegram_message(mint_address, combined_data)
-        else:
-            logger.warning(f"⚠️ No data from Bags API, sending basic notification")
-            # Send basic fallback message
-            fallback_message = f"🚀 New Bags Token Detected!\n\nMint: {mint_address}\n[View on Bags](https://bags.fm/{mint_address})\n[Solscan](https://solscan.io/token/{mint_address})"
-            
-            await telegram_bot.send_message(
-                chat_id=CHANNEL_ID,
-                text=fallback_message,
-                parse_mode="Markdown"
-            )
-            logger.info(f"📤 Sent fallback notification for {mint_address}")
+        # Get metadata from Helius with delay to allow indexing
+        helius_data = await get_helius_metadata_with_delay(mint_address)
+        
+        # Validate that we have essential metadata from Helius
+        if not helius_data.get("name") or not helius_data.get("symbol"):
+            logger.warning(f"⚠️ Skipping token {mint_address} - Helius metadata not available after 2s delay")
+            return
+        
+        # Combine data - Helius for name/image, Bags for fee split
+        combined_data = {
+            "mint": mint_address,
+            "name": helius_data.get("name"),
+            "symbol": helius_data.get("symbol"),
+            "image": helius_data.get("image"),
+            "website": helius_data.get("website"),
+            "createdBy": bags_data.get("createdBy", {}),
+            "royaltiesTo": bags_data.get("royaltiesTo", {}), 
+            "royaltyPercentage": bags_data.get("royaltyPercentage")
+        }
+        
+        logger.info(f"✅ Combined token data: name={combined_data['name']}, creator={combined_data['createdBy']}, royalty={combined_data['royaltiesTo']}")
+        await send_telegram_message(mint_address, combined_data)
         
     except Exception as e:
         logger.error(f"Error processing token {mint_address}: {e}")
@@ -699,7 +711,7 @@ async def main():
         # Test channel access
         await telegram_bot.send_message(
             chat_id=CHANNEL_ID,
-            text="✅ Bags Bot started! Monitoring for new tokens... (Hybrid API version with improved error handling)"
+            text="✅ Bags Bot started! Monitoring for new tokens... (Hybrid API with 2s Helius delay & validation)"
         )
         logger.info(f"✅ Telegram connection test successful!")
         
@@ -707,9 +719,9 @@ async def main():
         logger.error(f"Failed to initialize Telegram bot: {e}")
         sys.exit(1)
     
-    logger.info("Starting Bags Launchpad Telegram Bot (HYBRID VERSION)...")
+    logger.info("Starting Bags Launchpad Telegram Bot (HYBRID VERSION WITH 2S DELAY)...")
     logger.info(f"Monitoring for tokens from deployer: {BAGS_UPDATE_AUTHORITY}")
-    logger.info(f"Using Bags API for fee split + Helius for metadata")
+    logger.info(f"Using Bags API for fee split + Helius for metadata (with 2s indexing delay)")
     
     # Log configuration for debugging
     logger.info("=" * 50)
