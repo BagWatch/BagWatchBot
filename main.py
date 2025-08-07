@@ -162,11 +162,13 @@ def normalize_bags_response(data: Dict, mint_address: str) -> Dict:
             logger.info(f"   Processing official Bags API response")
             
             response_data = data.get('response', [])
+            logger.info(f"   Response data type: {type(response_data)}, length: {len(response_data) if isinstance(response_data, (list, dict)) else 'N/A'}")
             
             if isinstance(response_data, list) and len(response_data) > 0:
                 logger.info(f"   Found {len(response_data)} items in response")
                 
-                for item in response_data:
+                for i, item in enumerate(response_data):
+                    logger.info(f"   Processing item {i}: {type(item)}")
                     if isinstance(item, dict):
                         # Extract from /token-launch/creator/v2 endpoint
                         # Response: {"username":"<string>","pfp":"<string>","twitterUsername":"<string>","royaltyBps":123,"isCreator":true,"wallet":"<string>"}
@@ -194,8 +196,10 @@ def normalize_bags_response(data: Dict, mint_address: str) -> Dict:
                             if not normalized["name"]:
                                 normalized["name"] = item["username"]
                                 logger.info(f"   ✅ Found name from username: {item['username']}")
+            else:
+                logger.warning(f"   ⚠️ Response data is empty or not a list: {response_data}")
             
-            elif isinstance(response_data, str):
+            if isinstance(response_data, str):
                 # /token-launch/lifetime-fees returns a string (lamports amount)
                 logger.info(f"   Processing lifetime fees response: {response_data}")
                 # This is useful but not directly for our token display
