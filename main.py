@@ -442,31 +442,9 @@ def fetch_bags_token_data(mint_address: str) -> Optional[Dict]:
                 except:
                     pass
 
-            # Always get complete metadata from Helius (primary data source)
-            logger.info(f"🔍 Getting complete metadata from Helius for {mint_address}")
-            helius_metadata = get_helius_metadata(mint_address)
-            
-            # Use Helius data as primary source for main token info
-            if helius_metadata["name"] and helius_metadata["name"] != "Unknown Token":
-                result["name"] = helius_metadata["name"]
-                logger.info(f"✅ Using Helius token name: {helius_metadata['name']}")
-            
-            if helius_metadata["symbol"] and helius_metadata["symbol"].strip():
-                result["symbol"] = helius_metadata["symbol"]
-                logger.info(f"✅ Using Helius symbol: {helius_metadata['symbol']}")
-            
-            if helius_metadata["image"] and helius_metadata["image"].strip():
-                result["image"] = helius_metadata["image"]
-                logger.info(f"✅ Using Helius image: {helius_metadata['image']}")
-            
-            if helius_metadata["website"]:
-                result["website"] = helius_metadata["website"]
-                logger.info(f"✅ Using Helius website: {helius_metadata['website']}")
-            
-            # Store Helius Twitter for reference
-            helius_twitter = helius_metadata["twitter"]
-            if helius_twitter:
-                logger.info(f"✅ Found Helius project Twitter: @{helius_twitter}")
+            # Note: This function now ONLY extracts fee split data
+            # Helius metadata is handled separately in process_new_token
+            logger.info("🎯 This extraction focuses ONLY on fee split data")
             
             # Extract ticker from Bags page ($ version) as backup/supplement
             try:
@@ -514,28 +492,50 @@ def fetch_bags_token_data(mint_address: str) -> Optional[Dict]:
                             
                             logger.info(f"🔍 Analyzing handle: @{handle}")
                             
-                            # Check the surrounding HTML context
+                            # Check broader context - look at the full page source around this handle
                             try:
-                                # Get the element's outer HTML to see context
-                                element_html = link.get_attribute('outerHTML')
-                                parent = link.find_element(By.XPATH, "..")
-                                parent_text = parent.text.lower()
+                                # Get position of this handle in the full page source
+                                handle_upper = handle.upper()
+                                page_source = driver.page_source
                                 
-                                logger.info(f"  📄 Context: {parent_text}")
+                                # Find all occurrences of this handle in the page
+                                handle_positions = []
+                                start = 0
+                                while True:
+                                    pos = page_source.upper().find(handle_upper, start)
+                                    if pos == -1:
+                                        break
+                                    handle_positions.append(pos)
+                                    start = pos + 1
                                 
-                                # Simple, direct checks
-                                if "created by" in parent_text and not creator_handle:
-                                    creator_handle = handle
-                                    logger.info(f"🎯 CREATOR: @{handle} (found via 'created by')")
-                                elif "royalties to" in parent_text and not fee_handle:
-                                    fee_handle = handle
-                                    logger.info(f"💰 FEE RECIPIENT: @{handle} (found via 'royalties to')")
-                                elif "earns 100%" in parent_text and not fee_handle:
-                                    fee_handle = handle
-                                    logger.info(f"💰 FEE RECIPIENT: @{handle} (found via 'earns 100%')")
-                                elif "earns 0%" in parent_text and not creator_handle:
-                                    creator_handle = handle
-                                    logger.info(f"🎯 CREATOR: @{handle} (found via 'earns 0%')")
+                                logger.info(f"  🔍 Handle @{handle} found at {len(handle_positions)} positions in page")
+                                
+                                # For each position, check the surrounding text
+                                for pos in handle_positions:
+                                    # Get text around this position (±300 chars)
+                                    start_pos = max(0, pos - 300)
+                                    end_pos = min(len(page_source), pos + 300)
+                                    context = page_source[start_pos:end_pos].lower()
+                                    
+                                    logger.info(f"  📄 Context around pos {pos}: ...{context[280:320]}...")
+                                    
+                                    # Check for fee split indicators
+                                    if "created by" in context and handle_upper in context and not creator_handle:
+                                        creator_handle = handle
+                                        logger.info(f"🎯 CREATOR: @{handle} (found near 'created by')")
+                                        break
+                                    elif "royalties to" in context and handle_upper in context and not fee_handle:
+                                        fee_handle = handle
+                                        logger.info(f"💰 FEE RECIPIENT: @{handle} (found near 'royalties to')")
+                                        break
+                                    elif "earns 100%" in context and handle_upper in context and not fee_handle:
+                                        fee_handle = handle
+                                        logger.info(f"💰 FEE RECIPIENT: @{handle} (found near 'earns 100%')")
+                                        break
+                                    elif "earns 0%" in context and handle_upper in context and not creator_handle:
+                                        creator_handle = handle
+                                        logger.info(f"🎯 CREATOR: @{handle} (found near 'earns 0%')")
+                                        break
                                     
                             except Exception as context_error:
                                 logger.debug(f"Context analysis failed for @{handle}: {context_error}")
@@ -615,8 +615,15 @@ def fetch_bags_token_data(mint_address: str) -> Optional[Dict]:
             except Exception as e:
                 logger.debug(f"Error extracting royalty: {e}")
             
-            logger.info(f"✅ Successfully extracted Bags data for {mint_address}")
-            return result
+            # Return only the fee split data (not name/symbol/image - that comes from Helius)
+            fee_split_data = {
+                "createdBy": result.get("createdBy", {"twitter": ""}),
+                "royaltiesTo": result.get("royaltiesTo", {"twitter": ""}),
+                "royaltyPercentage": result.get("royaltyPercentage")
+            }
+            
+            logger.info(f"✅ Successfully extracted fee split data for {mint_address}")
+            return fee_split_data
             
         finally:
             if driver:
