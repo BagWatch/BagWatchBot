@@ -519,58 +519,92 @@ async def process_new_token(mint_address: str):
 
 # WebSocket monitoring and transaction processing (unchanged)
 async def check_transaction_for_token_creation(signature: str):
-    """Check if transaction contains Bags token creation"""
-    try:
-        logger.info(f"🔍 POLLING: New Bags transaction: {signature}")
-        
-        payload = {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "getTransaction",
-            "params": [
-                signature,
-                {
-                    "encoding": "json",
-                    "commitment": "confirmed",
-                    "maxSupportedTransactionVersion": 0
-                }
-            ]
-        }
-        
-        response = requests.post(RPC_URL, json=payload, timeout=10)
-        
-        if response.status_code == 200:
-            result = response.json()
+    """Check if transaction contains Bags token creation with retry logic"""
+    max_retries = 3
+    
+    for attempt in range(max_retries):
+        try:
+            logger.info(f"🔍 POLLING: New Bags transaction: {signature} (attempt {attempt + 1})")
             
-            if "result" in result and result["result"]:
-                tx_data = result["result"]
+            payload = {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "getTransaction",
+                "params": [
+                    signature,
+                    {
+                        "encoding": "json",
+                        "commitment": "confirmed",
+                        "maxSupportedTransactionVersion": 0
+                    }
+                ]
+            }
+            
+            # Increase timeout for better reliability
+            response = requests.post(RPC_URL, json=payload, timeout=15)
+            
+            if response.status_code == 200:
+                result = response.json()
                 
-                # Look for token creation in logs
-                if "meta" in tx_data and "logMessages" in tx_data["meta"]:
-                    logs = tx_data["meta"]["logMessages"]
+                if "result" in result and result["result"]:
+                    tx_data = result["result"]
                     
-                    # Check for token creation patterns
-                    token_creation_indicators = [
-                        "CreateMetadataAccount",
-                        "Program metaq invoke",
-                        "CreateMasterEdition"
-                    ]
+                    # Look for token creation in logs
+                    if "meta" in tx_data and "logMessages" in tx_data["meta"]:
+                        logs = tx_data["meta"]["logMessages"]
+                        
+                        # Check for token creation patterns
+                        token_creation_indicators = [
+                            "CreateMetadataAccount",
+                            "Program metaq invoke",
+                            "CreateMasterEdition",
+                            "InitializeMint"
+                        ]
+                        
+                        for log in logs:
+                            if any(indicator in log for indicator in token_creation_indicators):
+                                logger.info(f"🎯 BAGS TOKEN CREATION: {signature}")
+                                
+                                # Extract mint address from transaction
+                                mint_address = extract_mint_from_transaction(tx_data)
+                                if mint_address:
+                                    logger.info(f"🚀 POTENTIAL BAGS TOKEN FOUND: {mint_address}")
+                                    await process_new_token(mint_address)
+                                return  # Success, exit retry loop
+                                
+                    logger.info(f"📝 Transaction {signature} processed - no token creation detected")
+                    return  # Success, exit retry loop
                     
-                    for log in logs:
-                        if any(indicator in log for indicator in token_creation_indicators):
-                            logger.info(f"🎯 BAGS TOKEN CREATION: {signature}")
-                            
-                            # Extract mint address from transaction
-                            mint_address = extract_mint_from_transaction(tx_data)
-                            if mint_address:
-                                logger.info(f"🚀 POTENTIAL BAGS TOKEN FOUND: {mint_address}")
-                                await process_new_token(mint_address)
-                            break
-                            
-        time.sleep(1)  # Rate limiting
-        
-    except Exception as e:
-        logger.error(f"Error checking transaction {signature}: {e}")
+                elif "error" in result:
+                    logger.warning(f"⚠️ RPC error for {signature}: {result['error']}")
+                    if attempt < max_retries - 1:
+                        await asyncio.sleep(2 ** attempt)  # Exponential backoff
+                        continue
+                else:
+                    logger.warning(f"⚠️ No result data for transaction {signature}")
+                    return  # No point retrying
+                    
+            else:
+                logger.warning(f"⚠️ RPC request failed with status {response.status_code} for {signature}")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(2 ** attempt)  # Exponential backoff
+                    continue
+                    
+        except requests.exceptions.Timeout:
+            logger.warning(f"⏰ Timeout fetching transaction {signature} (attempt {attempt + 1})")
+            if attempt < max_retries - 1:
+                await asyncio.sleep(2 ** attempt)
+                continue
+        except Exception as e:
+            logger.error(f"❌ Error checking transaction {signature} (attempt {attempt + 1}): {e}")
+            if attempt < max_retries - 1:
+                await asyncio.sleep(2 ** attempt)
+                continue
+                
+    logger.error(f"❌ Failed to process transaction {signature} after {max_retries} attempts")
+    
+    # Add rate limiting
+    await asyncio.sleep(1)
 
 def extract_mint_from_transaction(tx_data: Dict) -> Optional[str]:
     """Extract mint address from transaction data"""
@@ -665,7 +699,7 @@ async def main():
         # Test channel access
         await telegram_bot.send_message(
             chat_id=CHANNEL_ID,
-            text="✅ Bags Bot started! Monitoring for new tokens... (API-only version)"
+            text="✅ Bags Bot started! Monitoring for new tokens... (Hybrid API version with improved error handling)"
         )
         logger.info(f"✅ Telegram connection test successful!")
         
@@ -673,10 +707,22 @@ async def main():
         logger.error(f"Failed to initialize Telegram bot: {e}")
         sys.exit(1)
     
-    logger.info("Starting Bags Launchpad Telegram Bot (API-ONLY VERSION)...")
+    logger.info("Starting Bags Launchpad Telegram Bot (HYBRID VERSION)...")
     logger.info(f"Monitoring for tokens from deployer: {BAGS_UPDATE_AUTHORITY}")
-    logger.info(f"Using ONLY Bags API for all token data")
-    logger.info("Starting monitoring services...")
+    logger.info(f"Using Bags API for fee split + Helius for metadata")
+    
+    # Log configuration for debugging
+    logger.info("=" * 50)
+    logger.info("🔧 BOT CONFIGURATION:")
+    logger.info(f"🎯 Monitoring wallet: {BAGS_UPDATE_AUTHORITY}")
+    logger.info(f"🔗 RPC URL: {RPC_URL}")
+    logger.info(f"🔗 WebSocket URL: {WS_URL}")
+    logger.info(f"📱 Channel ID: {CHANNEL_ID}")
+    logger.info(f"🔑 Helius API: {'✅ SET' if HELIUS_API_KEY else '❌ NOT SET'}")
+    logger.info(f"🔑 Bags API: {'✅ SET' if BAGS_API_KEY else '❌ NOT SET'}")
+    logger.info("=" * 50)
+    
+    logger.info("🚀 Starting monitoring services...")
     
     # Start monitoring
     await monitor_websocket()
